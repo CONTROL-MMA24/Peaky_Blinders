@@ -9184,6 +9184,174 @@ def ranking():
     )
 
 
+
+# === Admin Panel ===
+ADMIN_USERNAMES = {name.strip().lower() for name in os.environ.get("ADMIN_USERNAMES", "CONTROL-MMA24,admin").split(",") if name.strip()}
+
+def is_admin(user):
+    return bool(user and str(user.username).strip().lower() in ADMIN_USERNAMES)
+
+
+@app.route("/admin")
+def admin_panel():
+    user, error = login_required()
+    if error:
+        return error
+    if not is_admin(user):
+        return redirect(url_for("index", msg="Admin access denied."))
+
+    search_query = request.args.get("q", "").strip()
+    selected_user = None
+
+    if search_query:
+        users = User.query.filter(User.username.ilike(f"%{search_query}%")).order_by(User.username.asc()).limit(50).all()
+        selected_user = users[0] if users else None
+    else:
+        users = User.query.order_by(User.last_seen.desc()).limit(50).all()
+
+    return render_template_string("""
+    <!doctype html>
+    <html>
+    <head>
+        <title>Admin Panel</title>
+        <style>
+            body{margin:0;background:#07090b;color:#eee;font-family:Arial,sans-serif}
+            .wrap{max-width:1200px;margin:0 auto;padding:28px}
+            h1,h2{color:#e3a23b}.muted{color:#9d9386}.good{color:#75d67e}.bad{color:#ff7777}
+            a{color:#ffd27a}.card{background:#10151a;border:1px solid rgba(227,162,59,.35);border-radius:14px;padding:18px;margin:14px 0}
+            .top{display:flex;justify-content:space-between;gap:16px;align-items:center}
+            .grid{display:grid;grid-template-columns:repeat(4,minmax(0,1fr));gap:12px}.grid2{display:grid;grid-template-columns:repeat(2,minmax(0,1fr));gap:12px}
+            label{display:block;color:#cbb899;font-size:12px;text-transform:uppercase;margin-bottom:5px}
+            input,select{width:100%;box-sizing:border-box;background:#050708;color:#fff;border:1px solid #4d3a1b;border-radius:9px;padding:10px}
+            button,.btn{background:linear-gradient(135deg,#d89b32,#7a4305);border:0;color:#160b02;font-weight:900;border-radius:9px;padding:11px 14px;cursor:pointer;text-decoration:none;display:inline-block}
+            table{width:100%;border-collapse:collapse;margin-top:12px}th,td{border-bottom:1px solid #2a2520;padding:9px;text-align:left}th{color:#e3a23b}
+            @media(max-width:900px){.grid{grid-template-columns:1fr 1fr}.grid2{grid-template-columns:1fr}}
+        </style>
+    </head>
+    <body>
+    <div class="wrap">
+        <div class="top">
+            <div><h1>🛠 Admin Panel</h1><p class="muted">Beheer spelers, geld, EXP en andere waarden.</p></div>
+            <a class="btn" href="{{ url_for('index') }}">Terug naar game</a>
+        </div>
+
+        {% if msg %}<div class="card"><b class="good">{{ msg }}</b></div>{% endif %}
+
+        <div class="card">
+            <h2>Speler zoeken</h2>
+            <form method="get" action="/admin">
+                <div class="grid2">
+                    <div><label>Username</label><input name="q" value="{{ search_query }}" placeholder="Zoek speler"></div>
+                    <div style="align-self:end"><button type="submit">Zoeken</button></div>
+                </div>
+            </form>
+        </div>
+
+        {% if selected_user %}
+        <div class="card">
+            <h2>Speler aanpassen: {{ selected_user.username }}</h2>
+            <form method="post" action="/admin_action">
+                <input type="hidden" name="user_id" value="{{ selected_user.id }}">
+                <div class="grid">
+                    <div><label>Cash money</label><input type="number" name="money" value="{{ selected_user.money }}"></div>
+                    <div><label>Bank money</label><input type="number" name="bank" value="{{ selected_user.bank }}"></div>
+                    <div><label>EXP</label><input type="number" name="exp" value="{{ selected_user.exp }}"></div>
+                    <div><label>Bullets</label><input type="number" name="bullets" value="{{ selected_user.bullets }}"></div>
+                    <div><label>Bodyguards</label><input type="number" name="bodyguards" value="{{ selected_user.bodyguards }}"></div>
+                    <div><label>Vests</label><input type="number" name="bulletproof_vests" value="{{ selected_user.bulletproof_vests }}"></div>
+                    <div><label>Safehouses</label><input type="number" name="safehouses" value="{{ selected_user.safehouses }}"></div>
+                    <div><label>Lookouts</label><input type="number" name="lookouts" value="{{ selected_user.lookouts }}"></div>
+                    <div><label>Warehouse level</label><input type="number" name="warehouse_level" value="{{ selected_user.warehouse_level }}"></div>
+                    <div><label>Cars counter</label><input type="number" name="cars" value="{{ selected_user.cars }}"></div>
+                    <div><label>Location</label><input name="location" value="{{ selected_user.location }}"></div>
+                    <div>
+                        <label>Rank override</label>
+                        <select name="rank">
+                            {% for needed, rank_name in ranks %}
+                            <option value="{{ rank_name }}" {% if selected_user.rank == rank_name %}selected{% endif %}>{{ rank_name }}</option>
+                            {% endfor %}
+                        </select>
+                    </div>
+                    <div><label>Casino License</label><select name="casino_license"><option value="0" {% if not selected_user.casino_license %}selected{% endif %}>No</option><option value="1" {% if selected_user.casino_license %}selected{% endif %}>Yes</option></select></div>
+                    <div><label>Dead</label><select name="is_dead"><option value="0" {% if not selected_user.is_dead %}selected{% endif %}>No</option><option value="1" {% if selected_user.is_dead %}selected{% endif %}>Yes</option></select></div>
+                    <div><label>Jail until timestamp</label><input type="number" step="1" name="jail_until" value="{{ selected_user.jail_until }}"></div>
+                    <div><label>Avatar key</label><input name="avatar_key" value="{{ selected_user.avatar_key }}"></div>
+                </div>
+                <br>
+                <button name="action" value="save">Opslaan</button>
+                <button name="action" value="give_1m">+ $1.000.000 cash</button>
+                <button name="action" value="give_100m">+ $100.000.000 cash</button>
+                <button name="action" value="clear_jail">Uit jail halen</button>
+                <button name="action" value="revive">Revive</button>
+            </form>
+        </div>
+        {% endif %}
+
+        <div class="card">
+            <h2>Spelers</h2>
+            <table>
+                <tr><th>ID</th><th>Username</th><th>Cash</th><th>Bank</th><th>EXP</th><th>Rank</th><th>Locatie</th><th>Status</th><th>Actie</th></tr>
+                {% for p in users %}
+                <tr>
+                    <td>{{ p.id }}</td><td>{{ p.username }}</td><td>${{ moneyfmt(p.money) }}</td><td>${{ moneyfmt(p.bank) }}</td><td>{{ moneyfmt(p.exp) }}</td><td>{{ p.rank }}</td><td>{{ p.location }}</td>
+                    <td>{% if p.is_dead %}<span class="bad">Dead</span>{% else %}<span class="good">Alive</span>{% endif %}</td>
+                    <td><a href="/admin?q={{ p.username }}">Bewerken</a></td>
+                </tr>
+                {% endfor %}
+            </table>
+        </div>
+        <p class="muted">Zet in Render Environment Variables: ADMIN_USERNAMES=jouw_spelersnaam</p>
+    </div>
+    </body>
+    </html>
+    """, user=user, users=users, selected_user=selected_user, search_query=search_query, ranks=RANKS, moneyfmt=moneyfmt, msg=request.args.get("msg"))
+
+
+@app.route("/admin_action", methods=["POST"])
+def admin_action():
+    user, error = login_required()
+    if error:
+        return error
+    if not is_admin(user):
+        return redirect(url_for("index", msg="Admin access denied."))
+
+    target = User.query.get(request.form.get("user_id"))
+    if not target:
+        return redirect(url_for("admin_panel", msg="Speler niet gevonden."))
+
+    action = request.form.get("action", "save")
+
+    if action == "give_1m":
+        target.money = int(safe_number(target.money)) + 1_000_000
+    elif action == "give_100m":
+        target.money = int(safe_number(target.money)) + 100_000_000
+    elif action == "clear_jail":
+        target.jail_until = 0
+        target.bribe_available_at = 0
+    elif action == "revive":
+        target.is_dead = False
+        target.jail_until = 0
+    else:
+        int_fields = ["money", "bank", "exp", "bullets", "bodyguards", "bulletproof_vests", "safehouses", "lookouts", "warehouse_level", "cars"]
+        for field in int_fields:
+            try:
+                setattr(target, field, int(request.form.get(field) or 0))
+            except Exception:
+                pass
+        try:
+            target.jail_until = float(request.form.get("jail_until") or 0)
+        except Exception:
+            target.jail_until = 0
+        target.location = request.form.get("location") or target.location
+        target.rank = request.form.get("rank") or target.rank
+        target.avatar_key = request.form.get("avatar_key") or target.avatar_key
+        target.casino_license = request.form.get("casino_license") == "1"
+        target.is_dead = request.form.get("is_dead") == "1"
+
+    target.update_rank()
+    db.session.commit()
+    return redirect(url_for("admin_panel", q=target.username, msg=f"Speler {target.username} aangepast."))
+
 with app.app_context():
     os.makedirs(app.instance_path, exist_ok=True)
     db.create_all()
