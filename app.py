@@ -1,9 +1,11 @@
 import os
+import json
 import random
 import sqlite3
 import time
 import smtplib
 from email.message import EmailMessage
+import urllib.request
 from flask import Flask, request, redirect, url_for, session, render_template_string, Response
 from flask_sqlalchemy import SQLAlchemy
 from werkzeug.security import generate_password_hash, check_password_hash
@@ -23,25 +25,17 @@ db = SQLAlchemy(app)
 
 
 def send_password_reset_email(to_email, username, token):
-    """Send password reset email through SMTP settings from Render environment variables."""
-    smtp_host = os.environ.get("SMTP_HOST", "").strip()
-    smtp_port = int(os.environ.get("SMTP_PORT", "587"))
-    smtp_user = os.environ.get("SMTP_USER", "").strip()
-    smtp_password = os.environ.get("SMTP_PASSWORD", "").strip()
-    smtp_from = os.environ.get("SMTP_FROM", smtp_user or "no-reply@peakyblinders.local").strip()
+    """Send password reset email.
+
+    Production priority:
+    1) RESEND_API_KEY over HTTPS, best for Render because SMTP ports can be blocked.
+    2) SMTP fallback for local servers or hosts where SMTP is allowed.
+    """
     app_url = os.environ.get("APP_URL", "").strip().rstrip("/")
-
-    if not smtp_host or not smtp_user or not smtp_password:
-        return False, "Email server is not configured yet. Add SMTP_HOST, SMTP_PORT, SMTP_USER, SMTP_PASSWORD and SMTP_FROM in Render Environment."
-
     reset_link = f"{app_url}/forgot_password" if app_url else "Open the Forgot Password page in the game."
 
-    msg = EmailMessage()
-    msg["Subject"] = "Peaky Blinders - Password Reset Code"
-    msg["From"] = smtp_from
-    msg["To"] = to_email
-    msg.set_content(
-        f"""By Order of the Shelby Family
+    subject = "Peaky Blinders - Password Reset Code"
+    body = f"""By Order of the Shelby Family
 
 Hello {username},
 
@@ -56,14 +50,69 @@ Reset page:
 
 If you did not request this, you can ignore this email.
 """
-    )
+
+    # Preferred for Render: HTTPS email API, avoids SMTP network restrictions.
+    resend_api_key = os.environ.get("RESEND_API_KEY", "").strip()
+    resend_from = os.environ.get("RESEND_FROM", os.environ.get("SMTP_FROM", "Peaky Blinders <onboarding@resend.dev>")).strip()
+    if resend_api_key:
+        try:
+            payload = {
+                "from": resend_from,
+                "to": [to_email],
+                "subject": subject,
+                "text": body,
+            }
+            req = urllib.request.Request(
+                "https://api.resend.com/emails",
+                data=json.dumps(payload).encode("utf-8"),
+                headers={
+                    "Authorization": f"Bearer {resend_api_key}",
+                    "Content-Type": "application/json",
+                },
+                method="POST",
+            )
+            with urllib.request.urlopen(req, timeout=25) as response:
+                if 200 <= response.status < 300:
+                    return True, "Reset code sent to your email address."
+                return False, f"Email API returned status {response.status}."
+        except Exception as exc:
+            # Continue to SMTP fallback if SMTP is configured.
+            api_error = str(exc)
+    else:
+        api_error = "RESEND_API_KEY is not configured."
+
+    smtp_host = os.environ.get("SMTP_HOST", "").strip()
+    smtp_port = int(os.environ.get("SMTP_PORT", "587"))
+    smtp_user = os.environ.get("SMTP_USER", "").strip()
+    smtp_password = os.environ.get("SMTP_PASSWORD", "").replace(" ", "").strip()
+    smtp_from = os.environ.get("SMTP_FROM", smtp_user or "no-reply@peakyblinders.local").strip()
+
+    if not smtp_host or not smtp_user or not smtp_password:
+        return False, "Email is not fully configured. Add RESEND_API_KEY, or configure SMTP_HOST, SMTP_PORT, SMTP_USER, SMTP_PASSWORD and SMTP_FROM."
+
+    msg = EmailMessage()
+    msg["Subject"] = subject
+    msg["From"] = smtp_from
+    msg["To"] = to_email
+    msg.set_content(body)
 
     try:
-        with smtplib.SMTP(smtp_host, smtp_port, timeout=20) as server:
-            server.starttls()
-            server.login(smtp_user, smtp_password)
-            server.send_message(msg)
+        if smtp_port == 465:
+            with smtplib.SMTP_SSL(smtp_host, smtp_port, timeout=25) as server:
+                server.login(smtp_user, smtp_password)
+                server.send_message(msg)
+        else:
+            with smtplib.SMTP(smtp_host, smtp_port, timeout=25) as server:
+                server.ehlo()
+                server.starttls()
+                server.ehlo()
+                server.login(smtp_user, smtp_password)
+                server.send_message(msg)
         return True, "Reset code sent to your email address."
+    except OSError as exc:
+        if getattr(exc, "errno", None) == 101:
+            return False, "Email server cannot be reached from Render over SMTP. Use RESEND_API_KEY instead of Gmail SMTP."
+        return False, f"Email could not be sent: {exc}"
     except Exception as exc:
         return False, f"Email could not be sent: {exc}"
 
