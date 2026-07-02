@@ -2,6 +2,8 @@ import os
 import random
 import sqlite3
 import time
+import smtplib
+from email.message import EmailMessage
 from flask import Flask, request, redirect, url_for, session, render_template_string, Response
 from flask_sqlalchemy import SQLAlchemy
 from werkzeug.security import generate_password_hash, check_password_hash
@@ -12,6 +14,53 @@ app.config["SQLALCHEMY_DATABASE_URI"] = "sqlite:///peaky_blinders.db"
 app.config["SQLALCHEMY_TRACK_MODIFICATIONS"] = False
 
 db = SQLAlchemy(app)
+
+
+def send_password_reset_email(to_email, username, token):
+    """Send password reset email through SMTP settings from Render environment variables."""
+    smtp_host = os.environ.get("SMTP_HOST", "").strip()
+    smtp_port = int(os.environ.get("SMTP_PORT", "587"))
+    smtp_user = os.environ.get("SMTP_USER", "").strip()
+    smtp_password = os.environ.get("SMTP_PASSWORD", "").strip()
+    smtp_from = os.environ.get("SMTP_FROM", smtp_user or "no-reply@peakyblinders.local").strip()
+    app_url = os.environ.get("APP_URL", "").strip().rstrip("/")
+
+    if not smtp_host or not smtp_user or not smtp_password:
+        return False, "Email server is not configured yet. Add SMTP_HOST, SMTP_PORT, SMTP_USER, SMTP_PASSWORD and SMTP_FROM in Render Environment."
+
+    reset_link = f"{app_url}/forgot_password" if app_url else "Open the Forgot Password page in the game."
+
+    msg = EmailMessage()
+    msg["Subject"] = "Peaky Blinders - Password Reset Code"
+    msg["From"] = smtp_from
+    msg["To"] = to_email
+    msg.set_content(
+        f"""By Order of the Shelby Family
+
+Hello {username},
+
+Your password reset code is:
+
+{token}
+
+This code expires in 15 minutes.
+
+Reset page:
+{reset_link}
+
+If you did not request this, you can ignore this email.
+"""
+    )
+
+    try:
+        with smtplib.SMTP(smtp_host, smtp_port, timeout=20) as server:
+            server.starttls()
+            server.login(smtp_user, smtp_password)
+            server.send_message(msg)
+        return True, "Reset code sent to your email address."
+    except Exception as exc:
+        return False, f"Email could not be sent: {exc}"
+
 
 GAME_NAME = "Peaky Blinders"
 
@@ -3609,6 +3658,48 @@ html, body { margin:0!important; padding:0!important; overflow-x:hidden!importan
     text-align:center;
 }
 
+
+/* Login atmosphere: smoke, rain and cinematic glow */
+.login-smoke{
+    position:absolute;
+    pointer-events:none;
+    width:58vw;
+    height:58vw;
+    border-radius:50%;
+    filter:blur(42px);
+    opacity:.18;
+    mix-blend-mode:screen;
+    animation:loginSmokeDrift 18s ease-in-out infinite alternate;
+    background:radial-gradient(circle, rgba(220,220,220,.28), transparent 62%);
+}
+.smoke-one{left:-16vw;bottom:-22vw;}
+.smoke-two{right:-14vw;top:-24vw;animation-duration:23s;opacity:.14;}
+.login-rain{
+    position:absolute;
+    inset:0;
+    pointer-events:none;
+    opacity:.13;
+    background-image:
+        linear-gradient(115deg, rgba(255,255,255,.22) 0 1px, transparent 1px 8px);
+    background-size:34px 34px;
+    animation:loginRain 1.2s linear infinite;
+}
+.login-card-wide{
+    box-shadow:0 0 55px rgba(0,0,0,.85), 0 0 32px rgba(214,168,95,.13)!important;
+}
+.login-card-wide h1{
+    text-shadow:0 0 14px rgba(214,168,95,.24), 0 0 34px rgba(214,168,95,.10);
+}
+@keyframes loginSmokeDrift{
+    from{transform:translate3d(0,0,0) scale(1);}
+    to{transform:translate3d(7vw,-4vw,0) scale(1.18);}
+}
+@keyframes loginRain{
+    from{background-position:0 0;}
+    to{background-position:-34px 34px;}
+}
+
+.login-cinematic audio{display:none!important;}
 </style>
 <style>
 :root { --bg:#080808; --panel:rgba(20,20,20,.92); --gold:#d6a85f; --gold2:#9b6a32; --wine:#5c1010; --text:#e7dbc8; --muted:#a79a88; --green:#5cff73; --blue:#62b7ff; --red:#ff5555; }
@@ -3824,7 +3915,10 @@ table{background:rgba(0,0,0,.22)!important;border-radius:16px!important;overflow
 
 {% if not user %}
 <div class="login-wrap login-cinematic">
-    <audio id="peakyLoginMusic" src="/static/audio/peaky_theme.mp3" loop></audio>
+    <audio id="peakyLoginMusic" src="/static/audio/peaky_theme.mp3" loop preload="auto"></audio>
+    <div class="login-smoke smoke-one"></div>
+    <div class="login-smoke smoke-two"></div>
+    <div class="login-rain"></div>
     <div class="login-card login-card-wide">
         <div class="login-logo-line">BY ORDER OF THE SHELBY FAMILY</div>
         <h1>PEAKY BLINDERS</h1>
@@ -3839,7 +3933,7 @@ table{background:rgba(0,0,0,.22)!important;border-radius:16px!important;overflow
             <div class="login-two-col">
                 <form action="/password_reset_request" method="post" class="login-panel-form">
                     <h3>Request Reset Code</h3>
-                    <p class="muted">Enter the email address on your account. A local reset code will be shown in this development version.</p>
+                    <p class="muted">Enter the email address on your account. The reset code will be sent to your email inbox.</p>
                     Email:<br><input class="input" type="email" name="email" required maxlength="160">
                     <button class="btn">Get Reset Code</button>
                 </form>
@@ -3872,27 +3966,31 @@ table{background:rgba(0,0,0,.22)!important;border-radius:16px!important;overflow
             </div>
         {% endif %}
 
-        <div class="login-music-row">
-            <button type="button" class="btn" onclick="toggleLoginMusic()">Play / Pause Peaky Theme</button>
-            <span class="muted">Place your music file at <b>/static/audio/peaky_theme.mp3</b>.</span>
-        </div>
     </div>
 </div>
 <script>
-function toggleLoginMusic(){
+(function(){
     const audio = document.getElementById('peakyLoginMusic');
     if(!audio) return;
-    audio.volume = 0.35;
-    if(audio.paused){ audio.play().catch(()=>{}); }
-    else{ audio.pause(); }
-}
-document.addEventListener('click', function(){
-    const audio = document.getElementById('peakyLoginMusic');
-    if(audio && audio.paused){
-        audio.volume = 0.22;
+    audio.volume = 0.24;
+    audio.loop = true;
+
+    function startTheme(){
         audio.play().catch(()=>{});
+        document.removeEventListener('click', startTheme);
+        document.removeEventListener('keydown', startTheme);
+        document.removeEventListener('touchstart', startTheme);
+        document.removeEventListener('mousemove', startTheme);
     }
-}, {once:true});
+
+    // Browsers usually block sound until the first user interaction.
+    // This starts the theme automatically as soon as the player interacts with the login screen.
+    startTheme();
+    document.addEventListener('click', startTheme, {once:true});
+    document.addEventListener('keydown', startTheme, {once:true});
+    document.addEventListener('touchstart', startTheme, {once:true});
+    document.addEventListener('mousemove', startTheme, {once:true});
+})();
 </script>
 {% else %}
 
@@ -6912,16 +7010,22 @@ def forgot_password():
 def password_reset_request():
     email = (request.form.get("email") or "").strip().lower()
     user = User.query.filter(User.email.ilike(email)).first()
+
+    # Do not reveal whether an email address exists, except when SMTP is not configured.
     if not user:
-        return redirect(url_for("forgot_password", msg="No account found with that email address."))
+        return redirect(url_for("forgot_password", msg="If this email address exists, a reset code has been sent."))
 
     token = str(random.randint(100000, 999999))
     user.reset_token = token
     user.reset_expires_at = time.time() + (15 * 60)
     db.session.commit()
 
-    # Local/dev version: without an email server, the reset code is shown on screen.
-    return redirect(url_for("forgot_password", msg=f"Reset code for {email}: {token}. This code expires in 15 minutes."))
+    sent, mail_msg = send_password_reset_email(user.email, user.username, token)
+    if not sent:
+        # Keep token stored, but do not show it on screen.
+        return redirect(url_for("forgot_password", msg=mail_msg))
+
+    return redirect(url_for("forgot_password", msg="Reset code sent to your email address. Check your inbox or spam folder."))
 
 
 @app.route("/reset_password", methods=["POST"])
