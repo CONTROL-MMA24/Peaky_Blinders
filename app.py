@@ -10,7 +10,12 @@ from werkzeug.security import generate_password_hash, check_password_hash
 
 app = Flask(__name__)
 app.secret_key = os.environ.get("SECRET_KEY", "peaky-blinders-secret-key")
-app.config["SQLALCHEMY_DATABASE_URI"] = "sqlite:///peaky_blinders.db"
+
+database_url = os.environ.get("DATABASE_URL", "sqlite:///peaky_blinders.db")
+if database_url.startswith("postgres://"):
+    database_url = database_url.replace("postgres://", "postgresql://", 1)
+
+app.config["SQLALCHEMY_DATABASE_URI"] = database_url
 app.config["SQLALCHEMY_TRACK_MODIFICATIONS"] = False
 
 db = SQLAlchemy(app)
@@ -275,6 +280,7 @@ PRODUCTION_FACTORY_TYPES = {
 }
 
 CAR_FACTORY_RANK_VEHICLES = [
+    ("Head of the Shelby Company", "private_cruise_ship"),
     ("Head of the Shelby Company", "private_jet"),
     ("Family Boss", "bentley_4_5_litre"),
     ("Underboss", "rolls_royce_silver_ghost"),
@@ -590,6 +596,7 @@ OLDTIMER_VEHICLES = [
     {"key": "rolls_royce_silver_ghost", "year": 1927, "name": "Rolls-Royce Silver Ghost", "price": 100000, "bonus": 30},
     {"key": "bentley_4_5_litre", "year": 1928, "name": "Bentley 4½ Litre", "price": 250000, "bonus": 40},
     {"key": "private_jet", "year": 1930, "name": "Private Jet", "price": 25000000, "bonus": 60},
+    {"key": "private_cruise_ship", "year": 1931, "name": "Private Cruise Ship", "price": 50000000, "bonus": 75},
 ]
 
 VEHICLE_BY_KEY = {vehicle["key"]: vehicle for vehicle in OLDTIMER_VEHICLES}
@@ -597,7 +604,7 @@ VEHICLE_BY_KEY = {vehicle["key"]: vehicle for vehicle in OLDTIMER_VEHICLES}
 # Vehicle resale economy:
 # Normal vehicles sell below purchase price.
 # Exclusive prestige vehicles can be sold for profit.
-EXCLUSIVE_PROFIT_VEHICLES = {"rolls_royce_silver_ghost", "bentley_4_5_litre", "private_jet"}
+EXCLUSIVE_PROFIT_VEHICLES = {"rolls_royce_silver_ghost", "bentley_4_5_litre", "private_jet", "private_cruise_ship"}
 VEHICLE_RESALE_RATE = 0.65
 EXCLUSIVE_VEHICLE_RESALE_RATE = 1.20
 
@@ -619,6 +626,7 @@ VEHICLE_IMAGES = {
     "rolls_royce_silver_ghost": "/static/vehicles/rolls_royce_silver_ghost.jpg",
     "bentley_4_5_litre": "/static/vehicles/bentley_4_5_litre.jpg",
     "private_jet": "/static/vehicles/private_jet.jpg",
+    "private_cruise_ship": "/static/vehicles/private_cruise_ship.jpg",
 }
 
 
@@ -652,6 +660,7 @@ VEHICLE_DESIGN = {
     "rolls_royce_silver_ghost": {"category": "Legendary Collection", "tone": "#7d7d7d", "icon": "SILVER GHOST"},
     "bentley_4_5_litre": {"category": "Legendary Collection", "tone": "#244032", "icon": "BENTLEY"},
     "private_jet": {"category": "Aviation & Luxury", "tone": "#1e344d", "icon": "PRIVATE JET"},
+    "private_cruise_ship": {"category": "Aviation & Luxury", "tone": "#1b3f4a", "icon": "CRUISE SHIP"},
 }
 
 for vehicle in OLDTIMER_VEHICLES:
@@ -659,6 +668,30 @@ for vehicle in OLDTIMER_VEHICLES:
     vehicle["image"] = VEHICLE_IMAGES.get(vehicle["key"], "")
 
 VEHICLE_CATEGORY_ORDER = ["Starter Transport", "Middle Class", "Elite Motors", "Legendary Collection", "Aviation & Luxury"]
+
+VEHICLE_SPECS = {
+    "street_hand_cart": {"top_speed": "8 km/h", "fuel": "N/A"},
+    "birmingham_courier_bicycle": {"top_speed": "18 km/h", "fuel": "Human Power"},
+    "canal_work_horse": {"top_speed": "12 km/h", "fuel": "Oats & Hay"},
+    "raleigh_motor_bicycle": {"top_speed": "45 km/h", "fuel": "Petrol"},
+    "horse_goods_cart": {"top_speed": "10 km/h", "fuel": "Oats & Hay"},
+    "luxury_carriage_pair": {"top_speed": "15 km/h", "fuel": "Oats & Hay"},
+    "ford_model_t": {"top_speed": "72 km/h", "fuel": "Petrol"},
+    "austin_12_heavy": {"top_speed": "85 km/h", "fuel": "Petrol"},
+    "rolls_royce_silver_ghost": {"top_speed": "120 km/h", "fuel": "Premium Petrol"},
+    "bentley_4_5_litre": {"top_speed": "145 km/h", "fuel": "Premium Petrol"},
+    "private_cruise_ship": {"top_speed": "65 km/h", "fuel": "Marine Fuel"},
+    "private_jet": {"top_speed": "900 km/h", "fuel": "Jet Fuel"},
+}
+
+def vehicle_top_speed(vehicle):
+    key = vehicle.get("key") if isinstance(vehicle, dict) else getattr(vehicle, "key", "")
+    return VEHICLE_SPECS.get(key, {"top_speed": "N/A"}).get("top_speed", "N/A")
+
+def vehicle_fuel(vehicle):
+    key = vehicle.get("key") if isinstance(vehicle, dict) else getattr(vehicle, "key", "")
+    return VEHICLE_SPECS.get(key, {"fuel": "N/A"}).get("fuel", "N/A")
+
 
 def vehicle_categories_for_showroom(vehicles):
     grouped = []
@@ -904,6 +937,29 @@ class Family(db.Model):
     boss = db.relationship("User", foreign_keys=[boss_id])
     members = db.relationship("User", foreign_keys="User.family_id", backref=db.backref("family", lazy=True))
 
+
+class FamilyJoinRequest(db.Model):
+    id = db.Column(db.Integer, primary_key=True)
+    family_id = db.Column(db.Integer, db.ForeignKey("family.id"), nullable=False)
+    user_id = db.Column(db.Integer, db.ForeignKey("user.id"), nullable=False)
+    status = db.Column(db.String(30), default="pending")
+    created_at = db.Column(db.Float, default=time.time)
+
+    family = db.relationship("Family", backref=db.backref("join_requests", lazy=True))
+    user = db.relationship("User", backref=db.backref("family_join_requests", lazy=True))
+
+
+class FamilyChatMessage(db.Model):
+    id = db.Column(db.Integer, primary_key=True)
+    family_id = db.Column(db.Integer, db.ForeignKey("family.id"), nullable=False)
+    user_id = db.Column(db.Integer, db.ForeignKey("user.id"), nullable=False)
+    body = db.Column(db.Text, nullable=False)
+    created_at = db.Column(db.Float, default=time.time)
+
+    family = db.relationship("Family", backref=db.backref("chat_messages", lazy=True))
+    user = db.relationship("User", backref=db.backref("family_chat_messages", lazy=True))
+
+
 class CityBusiness(db.Model):
     id = db.Column(db.Integer, primary_key=True)
     user_id = db.Column(db.Integer, db.ForeignKey("user.id"), nullable=False)
@@ -1104,6 +1160,9 @@ def current_user():
         if not owns_avatar(user, user.avatar_key):
             user.avatar_key = "straat_jongen"
         user.rank = normalize_rank_name(user.rank)
+        user.family_role = normalize_family_role(user.family_role)
+        if user.family_id and user.family and user.family.boss_id == user.id:
+            user.family_role = "Leader"
         user.last_seen = time.time()
         user.update_rank()
         complete_timed_travel(user)
@@ -2608,6 +2667,52 @@ def family_bonus(user, key):
     return 0
 
 
+FAMILY_ROLES = ["Leader", "Co-Leader", "Officer", "Member"]
+JOIN_ASSIGNABLE_FAMILY_ROLES = ["Co-Leader", "Officer", "Member"]
+FAMILY_ROLE_LEGACY_MAP = {
+    "Leader": "Leader",
+    "Underboss": "Co-Leader",
+    "Associate": "Member",
+    "Soldier": "Officer",
+}
+
+
+def normalize_family_role(role):
+    if not role:
+        return "Solo"
+    return FAMILY_ROLE_LEGACY_MAP.get(role, role if role in FAMILY_ROLES or role == "Solo" else "Member")
+
+
+def family_role_badge(role):
+    role = normalize_family_role(role)
+    return {
+        "Leader": "👑 Leader",
+        "Co-Leader": "🤝 Co-Leader",
+        "Officer": "⭐ Officer",
+        "Member": "Member",
+    }.get(role, role)
+
+
+def family_can_manage_bank(user):
+    return bool(user and normalize_family_role(getattr(user, "family_role", None)) in ["Leader", "Co-Leader"])
+
+
+def family_can_start_war(user):
+    return bool(user and normalize_family_role(getattr(user, "family_role", None)) in ["Leader", "Co-Leader", "Officer"])
+
+
+def is_family_leader(user, family=None):
+    if not user:
+        return False
+    role = normalize_family_role(getattr(user, "family_role", "Solo"))
+    if family is not None and getattr(family, "boss_id", None) != getattr(user, "id", None):
+        return False
+    return role == "Leader" or (family is not None and getattr(family, "boss_id", None) == getattr(user, "id", None))
+
+
+def is_family_manager(user):
+    return normalize_family_role(getattr(user, "family_role", "Solo")) in ["Leader", "Co-Leader"]
+
 
 def friendship_between(user_id, other_id):
     if not user_id or not other_id:
@@ -3238,7 +3343,7 @@ html, body { margin:0!important; padding:0!important; overflow-x:hidden!importan
 
 
 /* === Sprint 5: Family & Territories Command Center === */
-.s5-wrap{display:flex;flex-direction:column;gap:20px}.s5-hero{position:relative;overflow:hidden;border:1px solid rgba(217,154,43,.28);border-radius:28px;padding:34px;background:linear-gradient(120deg,rgba(3,8,12,.96),rgba(14,28,31,.78),rgba(144,91,25,.22)),radial-gradient(circle at 82% 18%,rgba(217,154,43,.28),transparent 32%);box-shadow:0 26px 90px rgba(0,0,0,.38),inset 0 1px 0 rgba(255,255,255,.08)}.s5-hero:before{content:"";position:absolute;inset:-60px;background:linear-gradient(135deg,transparent 0 48%,rgba(255,220,150,.08) 49%,transparent 50% 100%);opacity:.5}.s5-eyebrow{position:relative;z-index:1;color:#d99a2b;text-transform:uppercase;letter-spacing:2.8px;font-weight:900;font-size:12px}.s5-hero h1{position:relative;z-index:1;margin:10px 0 10px;color:#fff0c8;font-family:Georgia,serif;font-size:58px;letter-spacing:6px;line-height:.92;text-shadow:0 8px 38px rgba(0,0,0,.85)}.s5-hero p{position:relative;z-index:1;margin:0;max-width:820px;color:#f4e7ce;line-height:1.55}.s5-stat-grid{display:grid;grid-template-columns:repeat(4,minmax(0,1fr));gap:14px}.s5-stat{border:1px solid rgba(217,154,43,.22);border-radius:20px;padding:18px;background:linear-gradient(180deg,rgba(255,255,255,.065),rgba(255,255,255,.02));box-shadow:0 16px 44px rgba(0,0,0,.24),inset 0 1px 0 rgba(255,255,255,.07)}.s5-stat small{display:block;color:#bfb1a0;text-transform:uppercase;letter-spacing:1.4px;font-size:11px}.s5-stat b{display:block;margin-top:8px;color:#ffe6b4;font-size:25px}.s5-command-grid{display:grid;grid-template-columns:1.15fr .85fr;gap:18px}.s5-panel{border:1px solid rgba(217,154,43,.22);border-radius:24px;padding:22px;background:rgba(3,10,14,.72);box-shadow:0 20px 58px rgba(0,0,0,.30),inset 0 1px 0 rgba(255,255,255,.06)}.s5-panel h2,.s5-panel h3{margin:0 0 14px;color:#fff0c8;font-family:Georgia,serif;letter-spacing:1.6px}.s5-panel p{color:#e8ddcc}.s5-treasury{display:grid;gap:12px}.s5-money{font-size:42px;color:#7dffb1;font-weight:900;text-shadow:0 0 24px rgba(125,255,177,.14)}.s5-form-row{display:grid;grid-template-columns:1fr auto auto;gap:10px;align-items:end}.s5-form-row .input{width:100%}.s5-bonus-list{display:grid;grid-template-columns:repeat(3,1fr);gap:10px}.s5-bonus{padding:14px;border-radius:16px;background:rgba(255,255,255,.05);border:1px solid rgba(255,255,255,.08)}.s5-bonus small{display:block;color:#bfb1a0;text-transform:uppercase;font-size:10px;letter-spacing:1.4px}.s5-bonus b{color:#d99a2b;font-size:20px}.s5-member-grid{display:grid;grid-template-columns:repeat(auto-fill,minmax(230px,1fr));gap:14px}.s5-member{position:relative;overflow:hidden;border-radius:20px;border:1px solid rgba(217,154,43,.20);padding:18px;background:linear-gradient(150deg,rgba(255,255,255,.07),rgba(255,255,255,.025));box-shadow:0 16px 42px rgba(0,0,0,.25)}.s5-member:before{content:"";position:absolute;right:-35px;top:-35px;width:110px;height:110px;border-radius:50%;background:rgba(217,154,43,.12)}.s5-avatar{width:48px;height:48px;border-radius:50%;display:grid;place-items:center;background:linear-gradient(135deg,#281707,#d99a2b);border:1px solid rgba(255,222,166,.46);color:#fff0c8;font-family:Georgia,serif;font-weight:900}.s5-member h3{margin:12px 0 4px;color:#fff}.s5-role{display:inline-flex;padding:5px 10px;border-radius:999px;background:rgba(217,154,43,.14);border:1px solid rgba(217,154,43,.28);color:#ffd58b;font-size:11px;text-transform:uppercase;letter-spacing:1px}.s5-member dl{display:grid;grid-template-columns:1fr auto;gap:8px;margin:14px 0 0}.s5-member dt{color:#bfb1a0}.s5-member dd{margin:0;color:#fff0c8;font-weight:800}.s5-territory-grid{display:grid;grid-template-columns:repeat(auto-fill,minmax(280px,1fr));gap:16px}.s5-territory{position:relative;overflow:hidden;border:1px solid rgba(217,154,43,.22);border-radius:24px;background:linear-gradient(150deg,rgba(10,22,26,.86),rgba(3,8,12,.76));box-shadow:0 22px 60px rgba(0,0,0,.28)}.s5-territory .top{padding:20px 20px 12px;border-bottom:1px solid rgba(255,255,255,.07);background:radial-gradient(circle at right top,rgba(217,154,43,.18),transparent 42%)}.s5-territory h3{margin:0;color:#fff0c8;font-family:Georgia,serif;font-size:25px;letter-spacing:2px}.s5-territory .body{padding:18px 20px 20px}.s5-line{display:flex;justify-content:space-between;gap:16px;margin:10px 0;color:#e8ddcc}.s5-line span{color:#bfb1a0}.s5-line b{color:#fff0c8;text-align:right}.s5-status{display:inline-flex;align-items:center;gap:6px;border-radius:999px;padding:6px 10px;font-size:11px;text-transform:uppercase;letter-spacing:1px;font-weight:900}.s5-status.state{background:rgba(80,160,255,.13);color:#8fc4ff;border:1px solid rgba(80,160,255,.24)}.s5-status.owned{background:rgba(125,255,177,.12);color:#91ffc0;border:1px solid rgba(125,255,177,.24)}.s5-status.enemy{background:rgba(255,92,92,.12);color:#ffb1a7;border:1px solid rgba(255,92,92,.24)}.s5-status.protected{background:rgba(217,154,43,.14);color:#ffd58b;border:1px solid rgba(217,154,43,.28)}.s5-war-room{display:grid;grid-template-columns:repeat(4,minmax(0,1fr));gap:12px}.s5-war{border-radius:18px;padding:15px;background:rgba(255,255,255,.055);border:1px solid rgba(255,255,255,.08)}.s5-war small{display:block;color:#bfb1a0;text-transform:uppercase;letter-spacing:1.2px;font-size:10px}.s5-war b{display:block;margin-top:7px;color:#ffe6b4;font-size:19px}.s5-rank-table{width:100%;border-collapse:separate;border-spacing:0 8px}.s5-rank-table th{color:#d99a2b;text-transform:uppercase;font-size:11px;letter-spacing:1.5px;text-align:left}.s5-rank-table td{background:rgba(255,255,255,.045);border-top:1px solid rgba(255,255,255,.07);border-bottom:1px solid rgba(255,255,255,.07);padding:12px}.s5-rank-table td:first-child{border-left:1px solid rgba(255,255,255,.07);border-radius:14px 0 0 14px}.s5-rank-table td:last-child{border-right:1px solid rgba(255,255,255,.07);border-radius:0 14px 14px 0}@media(max-width:1000px){.s5-stat-grid,.s5-war-room{grid-template-columns:repeat(2,1fr)}.s5-command-grid{grid-template-columns:1fr}.s5-form-row{grid-template-columns:1fr}.s5-bonus-list{grid-template-columns:1fr}}@media(max-width:640px){.s5-stat-grid,.s5-war-room{grid-template-columns:1fr}.s5-hero h1{font-size:40px}.s5-territory-grid{grid-template-columns:1fr}}
+.s5-wrap{display:flex;flex-direction:column;gap:20px}.s5-hero{position:relative;overflow:hidden;border:1px solid rgba(217,154,43,.28);border-radius:28px;padding:34px;background:linear-gradient(120deg,rgba(3,8,12,.96),rgba(14,28,31,.78),rgba(144,91,25,.22)),radial-gradient(circle at 82% 18%,rgba(217,154,43,.28),transparent 32%);box-shadow:0 26px 90px rgba(0,0,0,.38),inset 0 1px 0 rgba(255,255,255,.08)}.s5-hero:before{content:"";position:absolute;inset:-60px;background:linear-gradient(135deg,transparent 0 48%,rgba(255,220,150,.08) 49%,transparent 50% 100%);opacity:.5}.s5-eyebrow{position:relative;z-index:1;color:#d99a2b;text-transform:uppercase;letter-spacing:2.8px;font-weight:900;font-size:12px}.s5-hero h1{position:relative;z-index:1;margin:10px 0 10px;color:#fff0c8;font-family:Georgia,serif;font-size:58px;letter-spacing:6px;line-height:.92;text-shadow:0 8px 38px rgba(0,0,0,.85)}.s5-hero p{position:relative;z-index:1;margin:0;max-width:820px;color:#f4e7ce;line-height:1.55}.s5-stat-grid{display:grid;grid-template-columns:repeat(4,minmax(0,1fr));gap:14px}.s5-stat{border:1px solid rgba(217,154,43,.22);border-radius:20px;padding:18px;background:linear-gradient(180deg,rgba(255,255,255,.065),rgba(255,255,255,.02));box-shadow:0 16px 44px rgba(0,0,0,.24),inset 0 1px 0 rgba(255,255,255,.07)}.s5-stat small{display:block;color:#bfb1a0;text-transform:uppercase;letter-spacing:1.4px;font-size:11px}.s5-stat b{display:block;margin-top:8px;color:#ffe6b4;font-size:25px}.s5-command-grid{display:grid;grid-template-columns:1.15fr .85fr;gap:18px}.s5-panel{border:1px solid rgba(217,154,43,.22);border-radius:24px;padding:22px;background:rgba(3,10,14,.72);box-shadow:0 20px 58px rgba(0,0,0,.30),inset 0 1px 0 rgba(255,255,255,.06)}.s5-panel h2,.s5-panel h3{margin:0 0 14px;color:#fff0c8;font-family:Georgia,serif;letter-spacing:1.6px}.s5-panel p{color:#e8ddcc}.s5-treasury{display:grid;gap:12px}.s5-money{font-size:42px;color:#7dffb1;font-weight:900;text-shadow:0 0 24px rgba(125,255,177,.14)}.s5-form-row{display:grid;grid-template-columns:1fr auto auto;gap:10px;align-items:end}.s5-form-row .input{width:100%}.s5-bonus-list{display:grid;grid-template-columns:repeat(3,1fr);gap:10px}.s5-bonus{padding:14px;border-radius:16px;background:rgba(255,255,255,.05);border:1px solid rgba(255,255,255,.08)}.s5-bonus small{display:block;color:#bfb1a0;text-transform:uppercase;font-size:10px;letter-spacing:1.4px}.s5-bonus b{color:#d99a2b;font-size:20px}.s5-member-grid{display:grid;grid-template-columns:repeat(auto-fit,minmax(280px,1fr));gap:18px}.s5-member{position:relative;overflow:hidden;border-radius:20px;border:1px solid rgba(217,154,43,.20);padding:18px;min-height:365px;display:flex;flex-direction:column;background:linear-gradient(150deg,rgba(255,255,255,.07),rgba(255,255,255,.025));box-shadow:0 16px 42px rgba(0,0,0,.25)}.s5-member:before{content:"";position:absolute;right:-35px;top:-35px;width:110px;height:110px;border-radius:50%;background:rgba(217,154,43,.12)}.s5-avatar{width:48px;height:48px;border-radius:50%;display:grid;place-items:center;background:linear-gradient(135deg,#281707,#d99a2b);border:1px solid rgba(255,222,166,.46);color:#fff0c8;font-family:Georgia,serif;font-weight:900}.s5-member h3{margin:12px 0 4px;color:#fff}.s5-role{display:inline-flex;padding:5px 10px;border-radius:999px;background:rgba(217,154,43,.14);border:1px solid rgba(217,154,43,.28);color:#ffd58b;font-size:11px;text-transform:uppercase;letter-spacing:1px}.s5-member dl{display:grid;grid-template-columns:1fr auto;gap:8px;margin:14px 0 0}.s5-member dt{color:#bfb1a0}.s5-member dd{margin:0;color:#fff0c8;font-weight:800}.s5-owner-note{margin-top:auto;padding-top:16px;color:#ffd58b;font-weight:800}.s5-member-actions{display:flex;flex-direction:column;gap:10px;margin-top:auto;padding-top:16px}.s5-member-actions .input,.s5-member-actions .btn{width:100%;box-sizing:border-box;min-height:42px}.s5-member-actions .btn{justify-content:center;text-align:center}.s5-member-actions select{max-width:100%}.s5-territory-grid{display:grid;grid-template-columns:repeat(auto-fill,minmax(280px,1fr));gap:16px}.s5-territory{position:relative;overflow:hidden;border:1px solid rgba(217,154,43,.22);border-radius:24px;background:linear-gradient(150deg,rgba(10,22,26,.86),rgba(3,8,12,.76));box-shadow:0 22px 60px rgba(0,0,0,.28)}.s5-territory .top{padding:20px 20px 12px;border-bottom:1px solid rgba(255,255,255,.07);background:radial-gradient(circle at right top,rgba(217,154,43,.18),transparent 42%)}.s5-territory h3{margin:0;color:#fff0c8;font-family:Georgia,serif;font-size:25px;letter-spacing:2px}.s5-territory .body{padding:18px 20px 20px}.s5-line{display:flex;justify-content:space-between;gap:16px;margin:10px 0;color:#e8ddcc}.s5-line span{color:#bfb1a0}.s5-line b{color:#fff0c8;text-align:right}.s5-status{display:inline-flex;align-items:center;gap:6px;border-radius:999px;padding:6px 10px;font-size:11px;text-transform:uppercase;letter-spacing:1px;font-weight:900}.s5-status.state{background:rgba(80,160,255,.13);color:#8fc4ff;border:1px solid rgba(80,160,255,.24)}.s5-status.owned{background:rgba(125,255,177,.12);color:#91ffc0;border:1px solid rgba(125,255,177,.24)}.s5-status.enemy{background:rgba(255,92,92,.12);color:#ffb1a7;border:1px solid rgba(255,92,92,.24)}.s5-status.protected{background:rgba(217,154,43,.14);color:#ffd58b;border:1px solid rgba(217,154,43,.28)}.s5-war-room{display:grid;grid-template-columns:repeat(4,minmax(0,1fr));gap:12px}.s5-war{border-radius:18px;padding:15px;background:rgba(255,255,255,.055);border:1px solid rgba(255,255,255,.08)}.s5-war small{display:block;color:#bfb1a0;text-transform:uppercase;letter-spacing:1.2px;font-size:10px}.s5-war b{display:block;margin-top:7px;color:#ffe6b4;font-size:19px}.s5-rank-table{width:100%;border-collapse:separate;border-spacing:0 8px}.s5-rank-table th{color:#d99a2b;text-transform:uppercase;font-size:11px;letter-spacing:1.5px;text-align:left}.s5-rank-table td{background:rgba(255,255,255,.045);border-top:1px solid rgba(255,255,255,.07);border-bottom:1px solid rgba(255,255,255,.07);padding:12px}.s5-rank-table td:first-child{border-left:1px solid rgba(255,255,255,.07);border-radius:14px 0 0 14px}.s5-rank-table td:last-child{border-right:1px solid rgba(255,255,255,.07);border-radius:0 14px 14px 0}.s5-leader-crown{font-size:.65em;vertical-align:middle;filter:drop-shadow(0 0 10px rgba(217,154,43,.8))}.s5-role.leader{background:rgba(255,215,0,.18);border-color:rgba(255,215,0,.45);color:#ffe6a3}.s5-chat-form{display:grid;grid-template-columns:1fr auto;gap:10px;align-items:end;margin-bottom:14px}.s5-chat-list{display:grid;gap:10px;max-height:360px;overflow:auto}.s5-chat-message{border:1px solid rgba(255,255,255,.08);border-radius:16px;padding:12px;background:rgba(255,255,255,.045)}.s5-chat-message b{color:#ffe6b4}.s5-chat-message small{float:right;color:#bfb1a0}.s5-chat-message p{clear:both;margin:7px 0 0;color:#e8ddcc;white-space:pre-wrap}@media(max-width:1000px){.s5-stat-grid,.s5-war-room{grid-template-columns:repeat(2,1fr)}.s5-command-grid{grid-template-columns:1fr}.s5-form-row{grid-template-columns:1fr}.s5-bonus-list{grid-template-columns:1fr}}@media(max-width:640px){.s5-stat-grid,.s5-war-room{grid-template-columns:1fr}.s5-hero h1{font-size:40px}.s5-territory-grid{grid-template-columns:1fr}}
 
 
 /* Sprint bank upgrade */
@@ -3578,6 +3683,213 @@ html, body { margin:0!important; padding:0!important; overflow-x:hidden!importan
 }
 
 
+/* Avatar shop cleanup */
+.avatar-choice{
+    display:flex;
+    flex-direction:column;
+}
+.avatar-choice .avatar-label{
+    text-transform:uppercase;
+}
+.avatar-choice form{
+    margin-top:auto;
+}
+.avatar-choice form .btn{
+    width:100%;
+    min-height:44px;
+}
+
+
+/* === Garage final compact 4-column showroom === */
+.page-garage .main,
+.page-garage .content,
+.page-garage .panel,
+.page-garage .page-content{
+    max-width:1600px!important;
+    width:100%!important;
+}
+.garage-showroom{
+    max-width:1540px!important;
+    width:100%!important;
+    margin:0 auto!important;
+}
+.garage-compact-hero{
+    min-height:170px!important;
+    padding:24px 28px!important;
+    margin-bottom:16px!important;
+    border-radius:18px!important;
+}
+.garage-compact-hero h1{
+    font-size:46px!important;
+    letter-spacing:7px!important;
+}
+.garage-compact-hero p{
+    font-size:14px!important;
+    max-width:720px!important;
+}
+.garage-compact-summary{
+    position:absolute!important;
+    right:18px!important;
+    bottom:18px!important;
+    grid-template-columns:repeat(3,132px) 155px!important;
+    gap:8px!important;
+}
+.garage-compact-summary .s2-kpi{
+    min-height:62px!important;
+    padding:10px 12px!important;
+    border-radius:12px!important;
+}
+.garage-compact-summary .s2-kpi b{
+    font-size:18px!important;
+}
+.garage-compact-summary .s2-kpi span{
+    display:none!important;
+}
+.garage-compact-summary .buy-vehicle-btn{
+    min-height:62px!important;
+    font-size:12px!important;
+}
+.garage-category-tabs{
+    display:flex!important;
+    gap:8px!important;
+    overflow:auto!important;
+    padding:8px!important;
+    margin-bottom:18px!important;
+}
+.garage-category-tabs a{
+    min-width:150px!important;
+    white-space:nowrap!important;
+    font-size:11px!important;
+    padding:11px 10px!important;
+}
+.garage-all-showroom .section-heading-row{
+    margin:18px 0 14px!important;
+}
+.garage-four-grid{
+    display:grid!important;
+    grid-template-columns:repeat(4,minmax(0,1fr))!important;
+    gap:16px!important;
+    align-items:stretch!important;
+}
+.garage-small-card{
+    border-radius:14px!important;
+    min-width:0!important;
+}
+.garage-small-card:hover{
+    transform:translateY(-2px)!important;
+}
+.garage-small-image{
+    height:160px!important;
+}
+.garage-card-title{
+    left:12px!important;
+    right:12px!important;
+    bottom:10px!important;
+}
+.garage-card-title .icon{
+    font-size:18px!important;
+    line-height:1.05!important;
+}
+.garage-card-title .year{
+    font-size:10px!important;
+}
+.garage-small-body{
+    padding:10px!important;
+}
+.garage-specs{
+    grid-template-columns:repeat(3,1fr)!important;
+    gap:6px!important;
+    margin-bottom:8px!important;
+}
+.garage-specs span{
+    padding:7px 4px!important;
+    border-radius:9px!important;
+    font-size:8px!important;
+}
+.garage-specs b{
+    font-size:10px!important;
+}
+.garage-meta{
+    display:grid!important;
+    grid-template-columns:1fr 1fr!important;
+    gap:7px!important;
+    margin-bottom:8px!important;
+}
+.garage-meta div{
+    padding:8px!important;
+    border-radius:9px!important;
+}
+.garage-meta small{
+    font-size:8px!important;
+}
+.garage-meta b{
+    font-size:11px!important;
+}
+.garage-market-note{
+    min-height:28px!important;
+    margin:0 0 8px!important;
+    font-size:11px!important;
+    line-height:1.25!important;
+}
+.garage-small-card form{
+    margin-top:auto!important;
+}
+.garage-small-card .sprint2-buy-btn{
+    height:36px!important;
+    border-radius:10px!important;
+    font-size:12px!important;
+}
+.garage-city-compact{
+    grid-template-columns:repeat(4,minmax(0,1fr))!important;
+    gap:12px!important;
+}
+@media(max-width:1450px){
+    .garage-four-grid{grid-template-columns:repeat(3,minmax(0,1fr))!important;}
+    .garage-compact-summary{position:relative!important;right:auto!important;bottom:auto!important;margin-top:16px!important;grid-template-columns:repeat(2,minmax(150px,1fr))!important;}
+}
+@media(max-width:1000px){
+    .garage-four-grid{grid-template-columns:repeat(2,minmax(0,1fr))!important;}
+    .garage-city-compact{grid-template-columns:repeat(2,minmax(0,1fr))!important;}
+}
+@media(max-width:620px){
+    .garage-four-grid{grid-template-columns:1fr!important;}
+    .garage-city-compact{grid-template-columns:1fr!important;}
+}
+
+
+/* Garage title ghost-text fix */
+.page-garage .vehicle-silhouette:before,
+.page-garage .vehicle-silhouette:after,
+.page-garage .sprint2-nameplate:before,
+.page-garage .sprint2-nameplate:after,
+.page-garage .garage-card-title:before,
+.page-garage .garage-card-title:after{
+    content:none!important;
+    display:none!important;
+}
+.page-garage .vehicle-silhouette,
+.page-garage .sprint2-nameplate,
+.page-garage .garage-card-title{
+    background:transparent!important;
+    box-shadow:none!important;
+    border:0!important;
+    padding:0!important;
+}
+.page-garage .vehicle-silhouette .icon,
+.page-garage .sprint2-nameplate .icon,
+.page-garage .garage-card-title .icon{
+    background:transparent!important;
+    box-shadow:none!important;
+    border:0!important;
+}
+
+
+/* Garage remove old year badge behind title */
+.page-garage .vehicle-year-badge{
+    display:none!important;
+}
+
+
 /* Cinematic login / register / forgot password */
 .login-cinematic{
     position:relative;
@@ -3593,6 +3905,7 @@ html, body { margin:0!important; padding:0!important; overflow-x:hidden!importan
     pointer-events:none;
     background:linear-gradient(120deg, rgba(92,16,16,.20), transparent 40%, rgba(214,168,95,.10));
 }
+.login-cinematic audio{display:none!important;}
 .login-card-wide{
     position:relative;
     z-index:1;
@@ -3600,6 +3913,7 @@ html, body { margin:0!important; padding:0!important; overflow-x:hidden!importan
     text-align:left!important;
     background:rgba(7,7,7,.88)!important;
     backdrop-filter:blur(5px);
+    box-shadow:0 0 55px rgba(0,0,0,.85), 0 0 32px rgba(214,168,95,.13)!important;
 }
 .login-logo-line{
     color:var(--gold-light);
@@ -3612,6 +3926,7 @@ html, body { margin:0!important; padding:0!important; overflow-x:hidden!importan
     text-align:center;
     font-size:48px!important;
     margin:8px 0!important;
+    text-shadow:0 0 14px rgba(214,168,95,.24), 0 0 34px rgba(214,168,95,.10);
 }
 .login-card-wide > p{
     text-align:center;
@@ -3630,13 +3945,8 @@ html, body { margin:0!important; padding:0!important; overflow-x:hidden!importan
     padding:18px;
     background:linear-gradient(145deg,rgba(0,0,0,.46),rgba(92,16,16,.18));
 }
-.login-panel-form h3{
-    margin-top:0;
-}
-.login-panel-form .input{
-    width:100%;
-    margin:6px 0 12px;
-}
+.login-panel-form h3{margin-top:0;}
+.login-panel-form .input{width:100%;margin:6px 0 12px;}
 .login-link{
     display:inline-block;
     margin-left:10px;
@@ -3644,22 +3954,7 @@ html, body { margin:0!important; padding:0!important; overflow-x:hidden!importan
     text-decoration:none;
     font-weight:bold;
 }
-.login-tabs{
-    text-align:center;
-    margin-bottom:16px;
-}
-.login-music-row{
-    margin-top:16px;
-    display:flex;
-    gap:12px;
-    align-items:center;
-    justify-content:center;
-    flex-wrap:wrap;
-    text-align:center;
-}
-
-
-/* Login atmosphere: smoke, rain and cinematic glow */
+.login-tabs{text-align:center;margin-bottom:16px;}
 .login-smoke{
     position:absolute;
     pointer-events:none;
@@ -3684,12 +3979,6 @@ html, body { margin:0!important; padding:0!important; overflow-x:hidden!importan
     background-size:34px 34px;
     animation:loginRain 1.2s linear infinite;
 }
-.login-card-wide{
-    box-shadow:0 0 55px rgba(0,0,0,.85), 0 0 32px rgba(214,168,95,.13)!important;
-}
-.login-card-wide h1{
-    text-shadow:0 0 14px rgba(214,168,95,.24), 0 0 34px rgba(214,168,95,.10);
-}
 @keyframes loginSmokeDrift{
     from{transform:translate3d(0,0,0) scale(1);}
     to{transform:translate3d(7vw,-4vw,0) scale(1.18);}
@@ -3699,7 +3988,6 @@ html, body { margin:0!important; padding:0!important; overflow-x:hidden!importan
     to{background-position:-34px 34px;}
 }
 
-.login-cinematic audio{display:none!important;}
 </style>
 <style>
 :root { --bg:#080808; --panel:rgba(20,20,20,.92); --gold:#d6a85f; --gold2:#9b6a32; --wine:#5c1010; --text:#e7dbc8; --muted:#a79a88; --green:#5cff73; --blue:#62b7ff; --red:#ff5555; }
@@ -3865,6 +4153,9 @@ body:before{content:"";position:fixed;inset:0;pointer-events:none;z-index:-1;bac
 .input,input,select,textarea{background:rgba(0,0,0,.35)!important;border:1px solid rgba(218,157,55,.30)!important;color:#fff!important;border-radius:12px!important;}
 table{background:rgba(0,0,0,.22)!important;border-radius:16px!important;overflow:hidden!important;} th{background:rgba(217,154,43,.14)!important;color:var(--aaa-gold2)!important;} td,th{border-color:rgba(218,157,55,.15)!important;}
 .msg{margin:18px 26px 0!important;background:rgba(80,18,16,.80)!important;border:1px solid rgba(255,103,91,.35)!important;border-left:5px solid #d64b3e!important;border-radius:14px!important;color:#ffd3cc!important;}
+.msg.msg-success{background:rgba(18,80,34,.82)!important;border:1px solid rgba(92,255,115,.38)!important;border-left:5px solid #2ecc71!important;color:#d8ffe0!important;}
+.msg.msg-error{background:rgba(80,18,16,.82)!important;border:1px solid rgba(255,103,91,.38)!important;border-left:5px solid #d64b3e!important;color:#ffd3cc!important;}
+.msg.msg-info{background:rgba(18,45,80,.78)!important;border:1px solid rgba(98,183,255,.35)!important;border-left:5px solid #62b7ff!important;color:#d9efff!important;}
 .stats{grid-template-columns:repeat(auto-fit,minmax(175px,1fr))!important;gap:14px!important;}
 .stat-card small{color:var(--aaa-muted)!important;font-weight:900!important;letter-spacing:1.1px!important}.stat-card b{color:var(--aaa-gold2)!important;font-size:24px!important;}
 .page-garage .aaa-hero{background:linear-gradient(110deg,rgba(3,9,12,.95),rgba(7,18,23,.54),rgba(217,154,43,.20)),radial-gradient(circle at 76% 22%,rgba(217,154,43,.28),transparent 30%),linear-gradient(135deg,#07131a,#241508)!important;}
@@ -3919,6 +4210,7 @@ table{background:rgba(0,0,0,.22)!important;border-radius:16px!important;overflow
     <div class="login-smoke smoke-one"></div>
     <div class="login-smoke smoke-two"></div>
     <div class="login-rain"></div>
+
     <div class="login-card login-card-wide">
         <div class="login-logo-line">BY ORDER OF THE SHELBY FAMILY</div>
         <h1>PEAKY BLINDERS</h1>
@@ -3965,7 +4257,6 @@ table{background:rgba(0,0,0,.22)!important;border-radius:16px!important;overflow
                 </form>
             </div>
         {% endif %}
-
     </div>
 </div>
 <script>
@@ -3983,8 +4274,6 @@ table{background:rgba(0,0,0,.22)!important;border-radius:16px!important;overflow
         document.removeEventListener('mousemove', startTheme);
     }
 
-    // Browsers usually block sound until the first user interaction.
-    // This starts the theme automatically as soon as the player interacts with the login screen.
     startTheme();
     document.addEventListener('click', startTheme, {once:true});
     document.addEventListener('keydown', startTheme, {once:true});
@@ -4078,7 +4367,7 @@ table{background:rgba(0,0,0,.22)!important;border-radius:16px!important;overflow
                 <a class="profile-settings-btn" href="/settings" title="{{ t('profile_settings') }}">🎩</a>
             </div>
         </div>
-        {% if msg %}<div class="msg">{{ msg }}</div>{% endif %}
+        {% if msg %}<div class="msg {{ message_class(msg) }}">{{ msg }}</div>{% endif %}
         <section class="aaa-hero page-hero-{{ page }}">
             <div class="hero-copy">
                 <div class="hero-kicker">{{ t("hero_kicker") }}</div>
@@ -5022,13 +5311,13 @@ table{background:rgba(0,0,0,.22)!important;border-radius:16px!important;overflow
         <div class="s5-wrap">
             <section class="s5-hero">
                 <div class="s5-eyebrow">Family Headquarters</div>
-                <h1>{% if user.family %}{{ user.family.name }}{% else %}THE FAMILY{% endif %}</h1>
+                <h1>{% if user.family %}{{ user.family.name }} {% if user.family_role == "Leader" %}<span class="s5-leader-crown">👑</span>{% endif %}{% else %}THE FAMILY{% endif %}</h1>
                 <p>Build a crew, control money, coordinate members and grow into a real city-wide criminal organization.</p>
             </section>
 
             {% if user.family %}
                 <div class="s5-stat-grid">
-                    <div class="s5-stat"><small>Your Role</small><b>{{ user.family_role }}</b></div>
+                    <div class="s5-stat"><small>Your Role</small><b>{{ family_role_badge(user.family_role) }}</b></div>
                     <div class="s5-stat"><small>Members</small><b>{{ family_member_count(user.family) }}</b></div>
                     <div class="s5-stat"><small>Family Power</small><b>{{ moneyfmt(family_power(user.family)) }}</b></div>
                     <div class="s5-stat"><small>Controlled Cities</small><b>{{ family_territory_count(user.family) }}</b></div>
@@ -5038,11 +5327,11 @@ table{background:rgba(0,0,0,.22)!important;border-radius:16px!important;overflow
                     <section class="s5-panel s5-treasury">
                         <h2>Family Treasury</h2>
                         <div class="s5-money">${{ moneyfmt(user.family.bank) }}</div>
-                        <p>Deposits strengthen the family and help finance territory wars. Only Boss and Underboss can withdraw.</p>
+                        <p>Deposits strengthen the family and help finance territory wars. Only Leader and Co-Leader can withdraw.</p>
                         <form action="/family_action" method="post" class="s5-form-row">
                             <input class="input" type="number" name="amount" min="1" required placeholder="Amount">
                             <button class="btn" name="action" value="deposit">Deposit</button>
-                            {% if user.family_role in ["Boss", "Underboss"] %}<button class="btn" name="action" value="withdraw">Withdraw</button>{% endif %}
+                            {% if user.family_role in ["Leader", "Co-Leader"] %}<button class="btn" name="action" value="withdraw">Withdraw</button>{% endif %}
                         </form>
                     </section>
                     <section class="s5-panel">
@@ -5057,6 +5346,40 @@ table{background:rgba(0,0,0,.22)!important;border-radius:16px!important;overflow
                     </section>
                 </div>
 
+                {% if user.family_role == "Leader" %}
+                <section class="s5-panel">
+                    <h2>Join Requests</h2>
+                    {% if join_requests|length == 0 %}
+                        <p style="color:#777;">No open join requests.</p>
+                    {% else %}
+                        <table class="s5-rank-table">
+                            <tr><th>Player</th><th>Rank</th><th>Power</th><th>Assign Role</th><th>Action</th></tr>
+                            {% for req in join_requests %}
+                            <tr>
+                                <td>{{ req.user.username }}</td>
+                                <td>{{ req.user.rank }}</td>
+                                <td>{{ moneyfmt(power_score(req.user)) }}</td>
+                                <td>
+                                    <form action="/family_action" method="post" class="s5-form-row">
+                                        <input type="hidden" name="request_id" value="{{ req.id }}">
+                                        <select class="input" name="new_role">
+                                            {% for role in join_assignable_roles %}
+                                                <option value="{{ role }}">{{ role }}</option>
+                                            {% endfor %}
+                                        </select>
+                                </td>
+                                <td>
+                                        <button class="btn" name="action" value="accept_request">Accept</button>
+                                        <button class="btn btn-delete" name="action" value="deny_request">Deny</button>
+                                    </form>
+                                </td>
+                            </tr>
+                            {% endfor %}
+                        </table>
+                    {% endif %}
+                </section>
+                {% endif %}
+
                 <section class="s5-panel">
                     <h2>Family Roster</h2>
                     <div class="s5-member-grid">
@@ -5064,22 +5387,56 @@ table{background:rgba(0,0,0,.22)!important;border-radius:16px!important;overflow
                         <article class="s5-member">
                             <div class="s5-avatar">{{ member.username[:1]|upper }}</div>
                             <h3>{{ member.username }}</h3>
-                            <span class="s5-role">{{ member.family_role }}</span>
+                            <span class="s5-role {% if member.family_role == 'Leader' %}leader{% endif %}">{{ family_role_badge(member.family_role) }}</span>
                             <dl>
                                 <dt>Rank</dt><dd>{{ member.rank }}</dd>
                                 <dt>Power</dt><dd>{{ moneyfmt(power_score(member)) }}</dd>
                                 <dt>Location</dt><dd>{{ member.location }}</dd>
                                 <dt>Wealth</dt><dd>${{ moneyfmt(member.money + member.bank) }}</dd>
                             </dl>
+                            {% if member.family_role == "Leader" %}
+                            <div class="s5-owner-note">👑 This player owns the family.</div>
+                            {% endif %}
+                            {% if user.family_role == "Leader" and member.id != user.id %}
+                            <form action="/family_action" method="post" class="s5-member-actions">
+                                <input type="hidden" name="member_id" value="{{ member.id }}">
+                                <select class="input" name="new_role">
+                                    {% for role in family_roles %}
+                                        <option value="{{ role }}" {% if member.family_role == role %}selected{% endif %}>{{ role }}</option>
+                                    {% endfor %}
+                                </select>
+                                <button class="btn" name="action" value="change_role">Save Rank</button>
+                                <button class="btn" name="action" value="transfer_leader">Make Leader</button>
+                                <button class="btn btn-delete" name="action" value="remove_member">Remove Member</button>
+                            </form>
+                            {% endif %}
                         </article>
                         {% endfor %}
+                    </div>
+                </section>
+
+                <section class="s5-panel">
+                    <h2>Family Chat</h2>
+                    <form action="/family_action" method="post" class="s5-chat-form">
+                        <textarea class="input" name="body" rows="3" maxlength="500" required placeholder="Write a message to your family..."></textarea>
+                        <button class="btn" name="action" value="send_chat">Send</button>
+                    </form>
+                    <div class="s5-chat-list">
+                        {% for chat in family_messages %}
+                            <div class="s5-chat-message">
+                                <b>{{ chat.user.username if chat.user else 'Unknown' }}</b>
+                                <small>{{ message_age(chat) }}</small>
+                                <p>{{ chat.body }}</p>
+                            </div>
+                        {% endfor %}
+                        {% if family_messages|length == 0 %}<p style="color:#777;">No family chat messages yet.</p>{% endif %}
                     </div>
                 </section>
             {% else %}
                 <div class="s5-command-grid">
                     <section class="s5-panel">
                         <h2>Create Family</h2>
-                        <p>Cost: <b class="good">$50,000</b>. You become the Boss and start building a crew around your empire.</p>
+                        <p>Cost: <b class="good">$50,000</b>. You become the Leader and start building a crew around your empire.</p>
                         <form action="/family_action" method="post">
                             <input class="input" name="family_name" required maxlength="80" placeholder="Family name">
                             <button class="btn" name="action" value="create">Create Family</button>
@@ -5087,7 +5444,7 @@ table{background:rgba(0,0,0,.22)!important;border-radius:16px!important;overflow
                     </section>
                     <section class="s5-panel">
                         <h2>Join Family</h2>
-                        <p>Enter the exact family name to join as an Associate.</p>
+                        <p>Enter the exact family name to send a join request.</p>
                         <form action="/family_action" method="post">
                             <input class="input" name="family_name" required maxlength="80" placeholder="Family name">
                             <button class="btn" name="action" value="join">Join Family</button>
@@ -5099,7 +5456,7 @@ table{background:rgba(0,0,0,.22)!important;border-radius:16px!important;overflow
             <section class="s5-panel">
                 <h2>Family Rankings</h2>
                 <table class="s5-rank-table">
-                    <tr><th>#</th><th>Family</th><th>Boss</th><th>Members</th><th>Bank</th><th>Power</th></tr>
+                    <tr><th>#</th><th>Family</th><th>Leader</th><th>Members</th><th>Bank</th><th>Power</th></tr>
                     {% for fam in families %}
                     <tr><td>{{ loop.index }}</td><td>{{ fam.name }}</td><td>{{ fam.boss.username if fam.boss else 'Unknown' }}</td><td>{{ family_member_count(fam) }}</td><td class="good">${{ moneyfmt(fam.bank) }}</td><td class="gold">{{ moneyfmt(family_power(fam)) }}</td></tr>
                     {% endfor %}
@@ -5293,83 +5650,69 @@ table{background:rgba(0,0,0,.22)!important;border-radius:16px!important;overflow
 
     {% if page == "garage" %}
         {% set local_owned_count = owned_vehicles_in_city(user)|length %}
-        <section class="garage-stage">
-            <div class="garage-command sprint2-command">
+        <section class="garage-stage garage-showroom">
+            <div class="garage-command sprint2-command garage-compact-hero">
                 <div class="garage-title-stack">
                     <span class="eyebrow">SHELBY MOTOR WORKS</span>
                     <h1>GARAGE</h1>
-                    <p>Your vehicles, from street carts to prestige motors and private aircraft.</p>
+                    <p>Purchase vehicles to expand your empire. Vehicle selling is handled through the Marketplace.</p>
                 </div>
-                <div class="garage-summary-panel sprint2-summary">
-                    <div class="s2-kpi"><small>TOTAL VEHICLES</small><b>{{ total_vehicles(user) }}</b><span>Empire fleet</span></div>
-                    <div class="s2-kpi"><small>TOTAL VALUE</small><b>${{ moneyfmt(empire_value(user)) }}</b><span>Assets & vehicles</span></div>
-                    <div class="s2-kpi"><small>LOCAL GARAGE</small><b>{{ local_owned_count }} / 20</b><span>{{ user.location }}</span></div>
-                    <a class="btn buy-vehicle-btn" href="#vehicle-showroom">BUY NEW VEHICLE</a>
+                <div class="garage-summary-panel sprint2-summary garage-compact-summary">
+                    <div class="s2-kpi"><small>Total vehicles</small><b>{{ total_vehicles(user) }}</b><span>Empire fleet</span></div>
+                    <div class="s2-kpi"><small>Empire value</small><b>${{ moneyfmt(empire_value(user)) }}</b><span>Assets & vehicles</span></div>
+                    <div class="s2-kpi"><small>Local garage</small><b>{{ local_owned_count }} / 20</b><span>{{ user.location }}</span></div>
+                    <a class="btn buy-vehicle-btn" href="#vehicle-showroom">BUY VEHICLE</a>
                 </div>
             </div>
 
-            <div class="garage-tabs sprint2-tabs">
-                <a class="active">ALL VEHICLES</a>
-                <a>STARTER</a>
-                <a>MIDDLE CLASS</a>
-                <a>ELITE</a>
-                <a>LEGENDARY</a>
-                <a>AIRCRAFT</a>
+            <div class="garage-tabs sprint2-tabs garage-category-tabs">
+                <a class="active" href="#vehicle-showroom">ALL VEHICLES</a>
+                {% for group in vehicle_categories %}
+                    <a href="#cat-{{ group.name|replace(' ', '-')|replace('&', 'and')|lower }}">{{ group.name }}</a>
+                {% endfor %}
             </div>
 
-            <div id="vehicle-showroom" class="sprint2-showroom">
-            {% for group in vehicle_categories %}
-                <div class="vehicle-section sprint2-section">
-                    <div class="section-heading-row">
-                        <h2 class="vehicle-section-title">{{ group.name }}</h2>
-                        <span>{{ group.vehicles|length }} available</span>
-                    </div>
-                    <div class="vehicle-grid sprint2-vehicle-grid">
-                        {% for vehicle in group.vehicles %}
-                        {% set owned_here = vehicle_quantity(user, user.location, vehicle.key) %}
-                        <div class="vehicle-card aaa-vehicle-card sprint2-vehicle-card {% if owned_here > 0 %}is-owned{% endif %}">
-                            <div class="vehicle-image sprint2-vehicle-image" style="--vehicle-tone: {{ vehicle.tone }}; {% if vehicle.image %}background-image: linear-gradient(180deg,rgba(0,0,0,.02),rgba(0,0,0,.08) 42%,rgba(0,0,0,.78)), url('{{ vehicle.image }}');{% endif %}">
-                                <div class="vehicle-year-badge">{{ vehicle.year }}</div>
-                                {% if owned_here > 0 %}<div class="owned-ribbon">OWNED x{{ owned_here }}</div>{% endif %}
-                                <div class="vehicle-silhouette sprint2-nameplate">
-                                    <div class="icon">{{ vehicle.name }}</div>
-                                    <div class="year">{{ vehicle.category }}</div>
-                                </div>
-                            </div>
-                            <div class="vehicle-body sprint2-vehicle-body">
-                                <div class="vehicle-specs sprint2-specs">
-                                    <span>TOP SPEED<br><b>{{ 90 + vehicle.bonus * 3 }} km/h</b></span>
-                                    <span>FUEL<br><b>{% if vehicle.key == 'private_jet' %}Jet Fuel{% else %}{{ 18 - (vehicle.bonus // 8) }} L / 100km{% endif %}</b></span>
-                                    <span>BONUS<br><b>+{{ vehicle.bonus }}</b></span>
-                                </div>
-                                <div class="vehicle-meta compact sprint2-meta">
-                                    <div><small>PRICE</small><b class="good">${{ moneyfmt(vehicle.price) }}</b></div>
-                                    <div><small>SELL VALUE</small><b class="{% if vehicle.key in exclusive_profit_vehicles %}gold{% else %}muted{% endif %}">${{ moneyfmt(vehicle_sell_price(vehicle)) }}</b></div>
-                                    <div><small>LOCAL STOCK</small><b>{{ owned_here }}</b></div>
-                                </div>
-                                {% if vehicle.key in exclusive_profit_vehicles %}
-                                    <p class="gold">Exclusive vehicle: can be resold for profit.</p>
-                                {% else %}
-                                    <p class="muted">Normal resale: sells below purchase value.</p>
-                                {% endif %}
-                                <form action="/garage_action" method="post">
-                                    <input type="hidden" name="vehicle_key" value="{{ vehicle.key }}">
-                                    <button class="btn drive-btn sprint2-buy-btn" name="action" value="buy">PURCHASE</button>
-                                    {% if owned_here > 0 %}
-                                        <button class="btn" name="action" value="sell">SELL 1 FOR ${{ moneyfmt(vehicle_sell_price(vehicle)) }}</button>
-                                    {% endif %}
-                                </form>
+            <div id="vehicle-showroom" class="sprint2-showroom garage-all-showroom">
+                <div class="section-heading-row">
+                    <h2 class="vehicle-section-title">Vehicle Showroom</h2>
+                    <span>{{ vehicles|length }} vehicles available</span>
+                </div>
+
+                <div class="vehicle-grid sprint2-vehicle-grid garage-four-grid">
+                    {% for vehicle in vehicles %}
+                    {% set owned_here = vehicle_quantity(user, user.location, vehicle.key) %}
+                    <div id="cat-{{ vehicle.category|replace(' ', '-')|replace('&', 'and')|lower }}" class="vehicle-card aaa-vehicle-card sprint2-vehicle-card garage-small-card {% if owned_here > 0 %}is-owned{% endif %}">
+                        <div class="vehicle-image sprint2-vehicle-image garage-small-image" style="--vehicle-tone: {{ vehicle.tone }}; {% if vehicle.image %}background-image: linear-gradient(180deg,rgba(0,0,0,.03),rgba(0,0,0,.10) 44%,rgba(0,0,0,.74)), url('{{ vehicle.image }}');{% endif %}">
+                            {% if owned_here > 0 %}<div class="owned-ribbon">OWNED x{{ owned_here }}</div>{% endif %}
+                            <div class="vehicle-silhouette sprint2-nameplate garage-card-title">
+                                <div class="icon">{{ vehicle.name }}</div>
+                                <div class="year">{{ vehicle.category }}</div>
                             </div>
                         </div>
-                        {% endfor %}
+                        <div class="vehicle-body sprint2-vehicle-body garage-small-body">
+                            <div class="vehicle-specs sprint2-specs garage-specs">
+                                <span>TOP SPEED<br><b>{{ vehicle_top_speed(vehicle) }}</b></span>
+                                <span>FUEL<br><b>{{ vehicle_fuel(vehicle) }}</b></span>
+                                <span>BONUS<br><b>+{{ vehicle.bonus }}</b></span>
+                            </div>
+                            <div class="vehicle-meta compact sprint2-meta garage-meta">
+                                <div><small>PRICE</small><b class="good">${{ moneyfmt(vehicle.price) }}</b></div>
+                                <div><small>AVAILABLE</small><b>{{ owned_here }}</b></div>
+                            </div>
+                            <p class="muted garage-market-note">Selling goes through the Marketplace.</p>
+                            <form action="/garage_action" method="post">
+                                <input type="hidden" name="vehicle_key" value="{{ vehicle.key }}">
+                                <button class="btn drive-btn sprint2-buy-btn" name="action" value="buy">PURCHASE</button>
+                            </form>
+                        </div>
                     </div>
+                    {% endfor %}
                 </div>
-            {% endfor %}
             </div>
         </section>
 
         <h2 class="vehicle-section-title city-title">CITY GARAGES</h2>
-        <div class="garage-city-grid sprint2-city-grid">
+        <div class="garage-city-grid sprint2-city-grid garage-city-compact">
             {% for citydata in garages %}
             <div class="garage-city-card">
                 <h3>🚗 {{ citydata.city }} Garage</h3>
@@ -5409,23 +5752,23 @@ table{background:rgba(0,0,0,.22)!important;border-radius:16px!important;overflow
         <h2>🎩 {{ t("portrait_market") }}</h2>
         <div class="avatar-grid">
             {% for key, avatar in player_avatars.items() %}
-            <div class="avatar-choice {% if key == current_avatar.key %}is-selected{% endif %}">
+            <div class="avatar-choice {% if key == current_avatar.key %}is-selected{% endif %}" style="display:flex;flex-direction:column;height:100%;">
                 <img src="{{ avatar.image }}" alt="{{ avatar.label }}">
                 <div class="avatar-label">{{ avatar.label }}</div>
-                <div class="avatar-price">
-                    <b class="gold">{{ "★" * avatar.stars }}{{ "☆" * (5 - avatar.stars) }}</b><br>
-                    <span>{% if avatar.price == 0 %}{{ t("free") }}{% else %}${{ moneyfmt(avatar.price) }}{% endif %}</span>
+                <div class="avatar-price" style="margin-bottom:12px;">
+                    <div><b class="gold">{{ "★" * avatar.stars }}{{ "☆" * (5 - avatar.stars) }}</b></div>
+                    <div>{% if avatar.price == 0 %}0{% else %}${{ moneyfmt(avatar.price) }}{% endif %}</div>
                 </div>
-                <form action="/avatar_action" method="post">
+                {% if avatar.price > 0 %}
+                <form action="/avatar_action" method="post" style="margin-top:auto;">
                     <input type="hidden" name="avatar_key" value="{{ key }}">
                     {% if key in owned_keys %}
-                        <button class="btn" name="action" value="use">{% if key == current_avatar.key %}{{ t("selected") }}{% else %}{{ t("use_portrait") }}{% endif %}</button>
-                    {% elif avatar.price == 0 %}
-                        <button class="btn" name="action" value="buy">{{ t("unlock_free") }}</button>
+                        <button class="btn" style="width:100%;min-height:44px;" name="action" value="use">{% if key == current_avatar.key %}{{ t("selected") }}{% else %}{{ t("use_portrait") }}{% endif %}</button>
                     {% else %}
-                        <button class="btn" name="action" value="buy">{{ t("buy_portrait") }}</button>
+                        <button class="btn" style="width:100%;min-height:44px;" name="action" value="buy">{{ t("buy_portrait") }}</button>
                     {% endif %}
                 </form>
+                {% endif %}
             </div>
             {% endfor %}
         </div>
@@ -5951,7 +6294,7 @@ table{background:rgba(0,0,0,.22)!important;border-radius:16px!important;overflow
                     </section>
                     <section class="s5-panel">
                         <h2>Collect Taxes</h2>
-                        <p>Taxes go directly into the family treasury. Only Boss and Underboss can collect them.</p>
+                        <p>Taxes go directly into the family treasury. Only Leader and Co-Leader can collect them.</p>
                         <form action="/territory_action" method="post"><button class="btn" name="action" value="collect_tax">Collect Territory Taxes</button></form>
                     </section>
                 </div>
@@ -6604,6 +6947,40 @@ def exp_percent(user):
     except Exception:
         return 0
 
+
+def message_class(msg):
+    """Return a visual status class for feedback banners.
+
+    Successful actions should be green, failed/blocked actions should be red.
+    Existing routes mostly pass only `msg`, so this function classifies the
+    current text without requiring every redirect to be rewritten.
+    """
+    text = str(msg or "").strip().lower()
+    if not text:
+        return ""
+
+    error_words = [
+        "failed", "fail", "caught", "arrested", "jail", "fine:", "lost $", "you lost",
+        "not enough", "invalid", "cannot", "can't", "could not", "not found",
+        "incorrect", "dead", "wait ", "already", "required", "must", "costs",
+        "geen", "niet genoeg", "ongeldig", "mislukt", "gearresteerd", "gevangenis",
+        "wacht", "kan niet", "bestaat al", "verplicht",
+    ]
+    success_words = [
+        "✅", "successful", "success", "sent", "created", "deposited", "withdrew",
+        "received", "earned", "found", "stole", "unlocked", "welcome", "free.",
+        "accepted", "rejected", "denied", "removed", "updated", "changed", "promoted", "demoted",
+        "request sent", "join request sent", "family created", "message sent",
+        "gelukt", "succes", "verstuurd", "aangemaakt", "ontvangen", "verdiend",
+        "gevonden", "gestolen", "vrij", "geaccepteerd", "geweigerd", "verwijderd",
+    ]
+
+    if any(word in text for word in error_words):
+        return "msg-error"
+    if any(word in text for word in success_words):
+        return "msg-success"
+    return "msg-info"
+
 def render_page(user, page, **kwargs):
     return render_template_string(
         HTML_UI,
@@ -6662,11 +7039,18 @@ def render_page(user, page, **kwargs):
         vehicle_by_key=VEHICLE_BY_KEY,
         vehicle_categories_for_showroom=vehicle_categories_for_showroom,
         garage_city_value=garage_city_value,
+        vehicle_top_speed=vehicle_top_speed,
+        vehicle_fuel=vehicle_fuel,
         vehicle_theft_options=vehicle_theft_options(),
         owned_vehicles_in_city=owned_vehicles_in_city,
         family_power=family_power,
         family_member_count=family_member_count,
         family_bonus=family_bonus,
+        family_role_badge=family_role_badge,
+        normalize_family_role=normalize_family_role,
+        is_family_leader=is_family_leader,
+        family_can_manage_bank=family_can_manage_bank,
+        family_can_start_war=family_can_start_war,
         casino_owner_status=casino_owner_status,
         user_casinos=user_casinos,
         casino_license_cost=CASINO_LICENSE_COST,
@@ -6727,6 +7111,7 @@ def render_page(user, page, **kwargs):
         now_time=time.time(),
         moneyfmt=moneyfmt,
         exp_percent=exp_percent,
+        message_class=message_class,
         **kwargs,
     )
 
@@ -7011,7 +7396,6 @@ def password_reset_request():
     email = (request.form.get("email") or "").strip().lower()
     user = User.query.filter(User.email.ilike(email)).first()
 
-    # Do not reveal whether an email address exists, except when SMTP is not configured.
     if not user:
         return redirect(url_for("forgot_password", msg="If this email address exists, a reset code has been sent."))
 
@@ -7022,7 +7406,6 @@ def password_reset_request():
 
     sent, mail_msg = send_password_reset_email(user.email, user.username, token)
     if not sent:
-        # Keep token stored, but do not show it on screen.
         return redirect(url_for("forgot_password", msg=mail_msg))
 
     return redirect(url_for("forgot_password", msg="Reset code sent to your email address. Check your inbox or spam folder."))
@@ -7250,7 +7633,7 @@ def crime_action():
             exp = random.randint(3, 10)
             user.bullets = int(safe_number(user.bullets)) + bullets_found
             user.exp += exp
-            msg = f"You found an ammunition crate with {bullets_found} bullets. +{exp} EXP."
+            msg = f"✅ You found an ammunition crate with {bullets_found} bullets. +{exp} EXP."
 
         user.update_rank()
         db.session.commit()
@@ -7280,15 +7663,15 @@ def crime_action():
                 cash = random.randint(80, 350)
                 user.money += cash
                 user.exp += 3
-                msg = f"You found stolen parts and sold them for ${cash}."
+                msg = f"✅ You found stolen parts and sold them for ${cash}."
             elif roll <= 30:
                 cash = random.randint(350, 1200)
                 user.money += cash
                 user.exp += 6
-                msg = f"You stripped a vehicle for valuable parts and earned ${cash}."
+                msg = f"✅ You stripped a vehicle for valuable parts and earned ${cash}."
             else:
                 user.exp += 1
-                msg = "You searched the parking garages but found nothing worth stealing."
+                msg = "❌ You searched the parking garages but found nothing worth stealing."
         user.update_rank()
         db.session.commit()
         return redirect(url_for("index", msg=msg))
@@ -7331,7 +7714,7 @@ def crime_action():
                 user.arrests = safe_number(user.arrests) + 1
                 db.session.commit()
                 return redirect(url_for("jail", msg=f"🚔 Player vehicle theft failed and you were caught. Fine: ${fine}. Jail time: {jail_time} seconds."))
-            msg = f"Vehicle theft failed. {target.username}'s security and luck protected the {vehicle['name']}."
+            msg = f"❌ Vehicle theft failed. {target.username}'s security and luck protected the {vehicle['name']}."
         user.update_rank()
         db.session.commit()
         return redirect(url_for("index", msg=msg))
@@ -7368,11 +7751,11 @@ def crime_action():
         exp = random.randint(data["min_exp"], data["max_exp"])
         user.money += cash
         user.exp += exp
-        msg = f"{data['name']} successful. You earned ${cash} and {exp} EXP."
+        msg = f"✅ {data['name']} successful. You earned ${cash} and {exp} EXP."
     else:
         loss = min(user.money, random.randint(30, data["loss"]))
         user.money -= loss
-        msg = f"{data['name']} failed. You lost ${loss}."
+        msg = f"❌ {data['name']} failed. You lost ${loss}."
 
         if selected_vehicle and selected_vehicle_row and random.randint(1, 100) <= 3:
             selected_vehicle_row.quantity = max(0, safe_number(selected_vehicle_row.quantity) - 1)
@@ -7965,12 +8348,20 @@ def family():
     families = Family.query.all()
     families = sorted(families, key=family_power, reverse=True)[:50]
     family_members = []
+    join_requests = []
+    family_messages = []
     if user.family_id:
         family_members = User.query.filter_by(family_id=user.family_id).all()
         for member in family_members:
+            member.family_role = normalize_family_role(member.family_role)
+            if user.family and user.family.boss_id == member.id:
+                member.family_role = "Leader"
             member.update_rank()
         family_members = sorted(family_members, key=power_score, reverse=True)
-    return render_page(user, "family", families=families, family_members=family_members, msg=request.args.get("msg"))
+        if user.family_role == "Leader":
+            join_requests = FamilyJoinRequest.query.filter_by(family_id=user.family_id, status="pending").order_by(FamilyJoinRequest.created_at.desc()).all()
+        family_messages = FamilyChatMessage.query.filter_by(family_id=user.family_id).order_by(FamilyChatMessage.created_at.desc()).limit(25).all()
+    return render_page(user, "family", families=families, family_members=family_members, join_requests=join_requests, family_messages=family_messages, family_roles=JOIN_ASSIGNABLE_FAMILY_ROLES, join_assignable_roles=JOIN_ASSIGNABLE_FAMILY_ROLES, msg=request.args.get("msg"))
 
 
 @app.route("/family_action", methods=["POST"])
@@ -7998,7 +8389,7 @@ def family_action():
         db.session.add(fam)
         db.session.flush()
         user.family_id = fam.id
-        user.family_role = "Boss"
+        user.family_role = "Leader"
         db.session.commit()
         return redirect(url_for("family", msg=f"Family created: {name}."))
 
@@ -8008,10 +8399,15 @@ def family_action():
         fam = Family.query.filter_by(name=name).first()
         if not fam:
             return redirect(url_for("family", msg="Family not found. Use the exact name."))
-        user.family_id = fam.id
-        user.family_role = "Associate"
+        existing = FamilyJoinRequest.query.filter_by(family_id=fam.id, user_id=user.id, status="pending").first()
+        if existing:
+            return redirect(url_for("family", msg=f"You already have an open request for {fam.name}."))
+        req = FamilyJoinRequest(family_id=fam.id, user_id=user.id, status="pending", created_at=time.time())
+        db.session.add(req)
+        if fam.boss:
+            db.session.add(Message(user_id=fam.boss.id, category="family", title="New family join request", body=f"{user.username} wants to join {fam.name}.", sender_id=user.id, created_at=time.time()))
         db.session.commit()
-        return redirect(url_for("family", msg=f"You joined {fam.name}."))
+        return redirect(url_for("family", msg=f"Join request sent to {fam.name}. The Leader must accept it."))
 
     if action == "deposit":
         if not user.family_id or not user.family:
@@ -8028,8 +8424,8 @@ def family_action():
     if action == "withdraw":
         if not user.family_id or not user.family:
             return redirect(url_for("family", msg="You are not in a family."))
-        if user.family_role not in ["Boss", "Underboss"]:
-            return redirect(url_for("family", msg="Only the Boss or Underboss can withdraw from the family bank."))
+        if user.family_role not in ["Leader", "Co-Leader"]:
+            return redirect(url_for("family", msg="Only the Leader or Co-Leader can withdraw from the family bank."))
         if amount <= 0:
             return redirect(url_for("family", msg="Invalid amount."))
         if safe_number(user.family.bank) < amount:
@@ -8043,14 +8439,89 @@ def family_action():
         if not user.family_id or not user.family:
             return redirect(url_for("family", msg="You are not in a family."))
         fam = user.family
-        if user.family_role == "Boss" and family_member_count(fam) > 1:
-            return redirect(url_for("family", msg="Bosses cannot leave while other members remain."))
-        if user.family_role == "Boss" and family_member_count(fam) == 1:
+        if user.family_role == "Leader" and family_member_count(fam) > 1:
+            return redirect(url_for("family", msg="Leaders cannot leave while other members remain."))
+        if user.family_role == "Leader" and family_member_count(fam) == 1:
             db.session.delete(fam)
         user.family_id = None
         user.family_role = "Solo"
         db.session.commit()
         return redirect(url_for("family", msg="You left the family."))
+
+    if action in ["accept_request", "deny_request"]:
+        if not user.family_id or not user.family or user.family_role != "Leader":
+            return redirect(url_for("family", msg="Only the Leader can manage join requests."))
+        req = FamilyJoinRequest.query.filter_by(id=safe_int(request.form.get("request_id")), family_id=user.family_id, status="pending").first()
+        if not req:
+            return redirect(url_for("family", msg="Join request not found."))
+        applicant = req.user
+        if action == "deny_request":
+            req.status = "denied"
+            if applicant:
+                db.session.add(Message(user_id=applicant.id, category="family", title="Family request denied", body=f"Your request to join {user.family.name} was denied.", sender_id=user.id, created_at=time.time()))
+            db.session.commit()
+            return redirect(url_for("family", msg="Join request denied."))
+        new_role = request.form.get("new_role", "Member")
+        if new_role not in JOIN_ASSIGNABLE_FAMILY_ROLES:
+            return redirect(url_for("family", msg="Invalid family role."))
+        if not applicant or applicant.family_id:
+            req.status = "closed"
+            db.session.commit()
+            return redirect(url_for("family", msg="This player is already in a family."))
+        applicant.family_id = user.family_id
+        applicant.family_role = new_role
+        req.status = "accepted"
+        FamilyJoinRequest.query.filter(FamilyJoinRequest.user_id == applicant.id, FamilyJoinRequest.status == "pending", FamilyJoinRequest.id != req.id).update({"status": "closed"})
+        db.session.add(Message(user_id=applicant.id, category="family", title="Family request accepted", body=f"You joined {user.family.name} as {new_role}.", sender_id=user.id, created_at=time.time()))
+        db.session.commit()
+        return redirect(url_for("family", msg=f"{applicant.username} accepted as {new_role}."))
+
+    if action in ["change_role", "remove_member"]:
+        if not user.family_id or not user.family or user.family_role != "Leader":
+            return redirect(url_for("family", msg="Only the Leader can manage family members."))
+        member = User.query.filter_by(id=safe_int(request.form.get("member_id")), family_id=user.family_id).first()
+        if not member:
+            return redirect(url_for("family", msg="Family member not found."))
+        if member.id == user.id:
+            return redirect(url_for("family", msg="The Leader cannot manage themselves here."))
+        if action == "remove_member":
+            member.family_id = None
+            member.family_role = "Solo"
+            db.session.add(Message(user_id=member.id, category="family", title="Removed from family", body=f"You were removed from {user.family.name} by the Leader.", sender_id=user.id, created_at=time.time()))
+            db.session.commit()
+            return redirect(url_for("family", msg=f"{member.username} removed from the family."))
+        new_role = request.form.get("new_role", "Member")
+        if new_role not in JOIN_ASSIGNABLE_FAMILY_ROLES:
+            return redirect(url_for("family", msg="Invalid family role."))
+        member.family_role = new_role
+        db.session.commit()
+        return redirect(url_for("family", msg=f"{member.username} is now {new_role}."))
+
+    if action == "send_chat":
+        if not user.family_id or not user.family:
+            return redirect(url_for("family", msg="You are not in a family."))
+        body = request.form.get("body", "").strip()
+        if len(body) < 1:
+            return redirect(url_for("family", msg="Message cannot be empty."))
+        if len(body) > 500:
+            body = body[:500]
+        db.session.add(FamilyChatMessage(family_id=user.family_id, user_id=user.id, body=body, created_at=time.time()))
+        db.session.commit()
+        return redirect(url_for("family", msg="Family chat message sent."))
+
+    if action == "transfer_leader":
+        if not user.family_id or not user.family or user.family_role != "Leader":
+            return redirect(url_for("family", msg="Only the Leader can transfer leadership."))
+        member = User.query.filter_by(id=safe_int(request.form.get("member_id")), family_id=user.family_id).first()
+        if not member or member.id == user.id:
+            return redirect(url_for("family", msg="Family member not found."))
+        old_family = user.family
+        old_family.boss_id = member.id
+        user.family_role = "Co-Leader"
+        member.family_role = "Leader"
+        db.session.add(Message(user_id=member.id, category="family", title="You are now Leader", body=f"{user.username} transferred leadership of {old_family.name} to you.", sender_id=user.id, created_at=time.time()))
+        db.session.commit()
+        return redirect(url_for("family", msg=f"Leadership transferred to {member.username}."))
 
     return redirect(url_for("family", msg="Invalid family action."))
 
@@ -8219,8 +8690,6 @@ def garage():
         vehicles=OLDTIMER_VEHICLES,
         vehicle_categories=vehicle_categories_for_showroom(OLDTIMER_VEHICLES),
         garages=garage_overview(user),
-        vehicle_sell_price=vehicle_sell_price,
-        exclusive_profit_vehicles=EXCLUSIVE_PROFIT_VEHICLES,
         msg=request.args.get("msg"),
     )
 
@@ -8243,19 +8712,8 @@ def garage_action():
         row = CityVehicle(user_id=user.id, city=user.location, vehicle_key=vehicle_key, quantity=0)
         db.session.add(row)
 
-    if action == "sell":
-        if int(safe_number(row.quantity)) <= 0:
-            return redirect(url_for("garage", msg=f"You do not own a {vehicle['name']} in {user.location}."))
-
-        sell_price = vehicle_sell_price(vehicle)
-        row.quantity = int(safe_number(row.quantity)) - 1
-        user.cars = max(0, int(safe_number(user.cars)) - 1)
-        user.money = int(safe_number(user.money)) + sell_price
-        db.session.commit()
-
-        if vehicle_key in EXCLUSIVE_PROFIT_VEHICLES:
-            return redirect(url_for("garage", msg=f"Exclusive sale: you sold a {vehicle['year']} {vehicle['name']} for ${sell_price} and made a profit."))
-        return redirect(url_for("garage", msg=f"You sold a {vehicle['year']} {vehicle['name']} for ${sell_price}. Normal vehicles sell below purchase value."))
+    if action != "buy":
+        return redirect(url_for("garage", msg="Selling vehicles is only available through the Marketplace."))
 
     price = int(vehicle["price"])
     if safe_number(user.money) < price:
@@ -8816,8 +9274,8 @@ def territory_action():
 
     if not user.family_id or not user.family:
         return redirect(url_for("territories", msg="You need a family before using territory wars."))
-    if user.family_role not in ["Boss", "Underboss"]:
-        return redirect(url_for("territories", msg="Only the Boss or Underboss can manage territory wars."))
+    if user.family_role not in ["Leader", "Co-Leader", "Officer"]:
+        return redirect(url_for("territories", msg="Only the Leader, Co-Leader or Officer can manage territory wars."))
 
     action = request.form.get("action")
     ensure_city_territories()
@@ -9002,6 +9460,165 @@ def ranking():
         msg=request.args.get("msg"),
     )
 
+
+
+
+# === Admin Panel ===
+ADMIN_USERNAMES = {name.strip().lower() for name in os.environ.get("ADMIN_USERNAMES", "CONTROL-MMA24,admin").split(",") if name.strip()}
+
+def is_admin(user):
+    return bool(user and str(user.username).strip().lower() in ADMIN_USERNAMES)
+
+def admin_required():
+    user, error = login_required()
+    if error:
+        return None, error
+    if not is_admin(user):
+        return None, redirect(url_for("index", msg="Admin access denied."))
+    return user, None
+
+@app.route("/admin")
+def admin_panel():
+    user, error = admin_required()
+    if error:
+        return error
+    q = request.args.get("q", "").strip()
+    msg = request.args.get("msg")
+    selected_user = None
+    if q:
+        users = User.query.filter(User.username.ilike(f"%{q}%")).order_by(User.username.asc()).limit(50).all()
+        selected_user = users[0] if users else None
+    else:
+        users = User.query.order_by(User.last_seen.desc()).limit(50).all()
+
+    owned_vehicles = owned_vehicles_in_city(selected_user, selected_user.location) if selected_user else []
+    warehouse_rows = warehouse_overview(selected_user) if selected_user else []
+    weapon_rows = UserWeapon.query.filter_by(user_id=selected_user.id).all() if selected_user else []
+
+    return render_template_string("""
+<!doctype html><html><head><title>Admin Panel</title>
+<style>
+body{margin:0;background:#07090b;color:#eee;font-family:Arial,sans-serif}.wrap{max-width:1400px;margin:auto;padding:26px}h1,h2,h3{color:#e3a23b}.muted{color:#9d9386}.good{color:#75d67e}.bad{color:#ff7777}a{color:#ffd27a}.card{background:#10151a;border:1px solid rgba(227,162,59,.35);border-radius:14px;padding:16px;margin:12px 0}.top{display:flex;justify-content:space-between;gap:16px}.grid{display:grid;grid-template-columns:repeat(4,minmax(0,1fr));gap:10px}.grid2{display:grid;grid-template-columns:repeat(2,minmax(0,1fr));gap:10px}.grid3{display:grid;grid-template-columns:repeat(3,minmax(0,1fr));gap:10px}label{display:block;color:#cbb899;font-size:11px;text-transform:uppercase;margin:0 0 5px}input,select{width:100%;box-sizing:border-box;background:#050708;color:#fff;border:1px solid #4d3a1b;border-radius:9px;padding:9px}button,.btn{background:linear-gradient(135deg,#d89b32,#7a4305);border:0;color:#160b02;font-weight:900;border-radius:9px;padding:10px 13px;cursor:pointer;text-decoration:none;display:inline-block;margin:3px}.danger{background:linear-gradient(135deg,#b83a32,#5a0905)!important;color:#fff!important}.blue{background:linear-gradient(135deg,#5490d8,#173d70)!important;color:#fff!important}table{width:100%;border-collapse:collapse}th,td{border-bottom:1px solid #2a2520;padding:8px;text-align:left}th{color:#e3a23b}.pill{display:inline-block;border:1px solid #4d3a1b;border-radius:999px;padding:4px 8px;margin:2px;background:#090b0d;color:#d8c09a;font-size:12px}@media(max-width:1000px){.grid,.grid2,.grid3{grid-template-columns:1fr}}
+</style></head><body><div class="wrap">
+<div class="top"><div><h1>🛠 Admin Panel</h1><p class="muted">Spelers, economy, voertuigen, warehouse, wapens en status beheren.</p></div><a class="btn" href="{{ url_for('index') }}">Terug naar game</a></div>
+{% if msg %}<div class="card"><b class="good">{{ msg }}</b></div>{% endif %}
+<div class="card"><h2>Speler zoeken</h2><form method="get" action="/admin"><div class="grid2"><div><label>Username</label><input name="q" value="{{ q }}" placeholder="Zoek speler"></div><div style="align-self:end"><button>Zoeken</button></div></div></form></div>
+{% if selected_user %}
+<div class="card"><h2>Speler aanpassen: {{ selected_user.username }}</h2>
+<form method="post" action="/admin_action"><input type="hidden" name="user_id" value="{{ selected_user.id }}">
+<div class="grid">
+<div><label>Cash</label><input type="number" name="money" value="{{ selected_user.money }}"></div><div><label>Bank</label><input type="number" name="bank" value="{{ selected_user.bank }}"></div><div><label>Bank loan</label><input type="number" name="bank_loan" value="{{ selected_user.bank_loan }}"></div><div><label>EXP</label><input type="number" name="exp" value="{{ selected_user.exp }}"></div>
+<div><label>Bullets</label><input type="number" name="bullets" value="{{ selected_user.bullets }}"></div><div><label>Bodyguards</label><input type="number" name="bodyguards" value="{{ selected_user.bodyguards }}"></div><div><label>Vests</label><input type="number" name="bulletproof_vests" value="{{ selected_user.bulletproof_vests }}"></div><div><label>Safehouses</label><input type="number" name="safehouses" value="{{ selected_user.safehouses }}"></div>
+<div><label>Lookouts</label><input type="number" name="lookouts" value="{{ selected_user.lookouts }}"></div><div><label>Warehouse level</label><input type="number" name="warehouse_level" value="{{ selected_user.warehouse_level }}"></div><div><label>Cars counter</label><input type="number" name="cars" value="{{ selected_user.cars }}"></div><div><label>Location</label><input name="location" value="{{ selected_user.location }}"></div>
+<div><label>Rank</label><select name="rank">{% for needed, rank_name in ranks %}<option value="{{ rank_name }}" {% if selected_user.rank == rank_name %}selected{% endif %}>{{ rank_name }}</option>{% endfor %}</select></div>
+<div><label>Casino license</label><select name="casino_license"><option value="0" {% if not selected_user.casino_license %}selected{% endif %}>No</option><option value="1" {% if selected_user.casino_license %}selected{% endif %}>Yes</option></select></div>
+<div><label>Dead / geblokkeerd</label><select name="is_dead"><option value="0" {% if not selected_user.is_dead %}selected{% endif %}>No</option><option value="1" {% if selected_user.is_dead %}selected{% endif %}>Yes</option></select></div>
+<div><label>Avatar key</label><input name="avatar_key" value="{{ selected_user.avatar_key }}"></div>
+</div><br>
+<button name="action" value="save">Opslaan</button><button name="action" value="give_1m">+ $1M</button><button name="action" value="give_100m">+ $100M</button><button name="action" value="give_1b">+ $1B</button><button name="action" value="clear_jail">Uit jail</button><button name="action" value="reset_cooldowns">Cooldowns reset</button><button class="danger" name="action" value="kill">Blokkeren</button><button name="action" value="revive">Revive</button>
+</form></div>
+<div class="grid3">
+<div class="card"><h2>Voertuig geven</h2><form method="post" action="/admin_give_vehicle"><input type="hidden" name="user_id" value="{{ selected_user.id }}"><label>Voertuig</label><select name="vehicle_key">{% for vehicle in vehicles %}<option value="{{ vehicle.key }}">{{ vehicle.year }} {{ vehicle.name }}</option>{% endfor %}</select><label>Stad</label><select name="city">{% for city in cities %}<option value="{{ city }}" {% if selected_user.location == city %}selected{% endif %}>{{ city }}</option>{% endfor %}</select><label>Aantal</label><input type="number" name="amount" value="1" min="1"><br><br><button>Geef voertuig</button></form></div>
+<div class="card"><h2>Warehouse geven</h2><form method="post" action="/admin_give_warehouse"><input type="hidden" name="user_id" value="{{ selected_user.id }}"><label>Item</label><select name="item_key">{% for key,item in contraband.items() %}<option value="{{ key }}">{{ item.label }}</option>{% endfor %}</select><label>Aantal</label><input type="number" name="amount" value="100" min="1"><br><br><button>Geef item</button></form></div>
+<div class="card"><h2>Wapen geven</h2><form method="post" action="/admin_give_weapon"><input type="hidden" name="user_id" value="{{ selected_user.id }}"><label>Wapen</label><select name="weapon_key">{% for key,weapon in weapons.items() %}<option value="{{ key }}">{{ weapon.name }}</option>{% endfor %}</select><label>Aantal</label><input type="number" name="amount" value="1" min="1"><br><br><button>Geef wapen</button></form></div>
+</div>
+<div class="grid2">
+<div class="card"><h2>Avatar beheren</h2><form method="post" action="/admin_give_avatar"><input type="hidden" name="user_id" value="{{ selected_user.id }}"><label>Avatar</label><select name="avatar_key">{% for key,avatar in avatars.items() %}<option value="{{ key }}">{{ avatar.label }}</option>{% endfor %}</select><br><br><button name="action" value="give">Geef avatar</button><button name="action" value="set">Geef + actief zetten</button></form><p class="muted">Owned: {{ selected_user.owned_avatars }}</p></div>
+<div class="card"><h2>Reset / verwijderen</h2><form method="post" action="/admin_reset_player" onsubmit="return confirm('Zeker weten?');"><input type="hidden" name="user_id" value="{{ selected_user.id }}"><button class="danger" name="action" value="soft_reset">Soft reset speler</button><button class="danger" name="action" value="delete_user">Verwijder speler</button></form><p class="muted">Soft reset houdt username/wachtwoord, maar wist voortgang.</p></div>
+</div>
+<div class="grid3">
+<div class="card"><h2>Bezittingen voertuig</h2>{% for row in owned_vehicles %}<span class="pill">{{ row.vehicle.name }} x{{ row.quantity }}</span>{% else %}<span class="muted">Geen voertuigen hier.</span>{% endfor %}</div>
+<div class="card"><h2>Warehouse</h2>{% for row in warehouse_rows %}<span class="pill">{{ row.label }} x{{ row.quantity }}</span>{% endfor %}</div>
+<div class="card"><h2>Wapens</h2>{% for row in weapon_rows %}<span class="pill">{{ weapons.get(row.weapon_key, {}).get('name', row.weapon_key) }} x{{ row.quantity }}</span>{% else %}<span class="muted">Geen wapens.</span>{% endfor %}</div>
+</div>
+{% endif %}
+<div class="card"><h2>Spelers</h2><table><tr><th>ID</th><th>Username</th><th>Cash</th><th>Bank</th><th>EXP</th><th>Rank</th><th>Locatie</th><th>Status</th><th>Actie</th></tr>{% for p in users %}<tr><td>{{ p.id }}</td><td>{{ p.username }}</td><td>${{ moneyfmt(p.money) }}</td><td>${{ moneyfmt(p.bank) }}</td><td>{{ moneyfmt(p.exp) }}</td><td>{{ p.rank }}</td><td>{{ p.location }}</td><td>{% if p.is_dead %}<span class="bad">Dead</span>{% else %}<span class="good">Alive</span>{% endif %}</td><td><a href="/admin?q={{ p.username }}">Bewerken</a></td></tr>{% endfor %}</table></div>
+</div></body></html>
+""", user=user, users=users, selected_user=selected_user, q=q, ranks=RANKS, moneyfmt=moneyfmt, msg=msg, vehicles=OLDTIMER_VEHICLES, cities=CITIES, contraband=CONTRABAND, weapons=WEAPON_TYPES, avatars=PLAYER_AVATARS, owned_vehicles=owned_vehicles, warehouse_rows=warehouse_rows, weapon_rows=weapon_rows)
+
+@app.route("/admin_action", methods=["POST"])
+def admin_action():
+    user, error = admin_required()
+    if error: return error
+    target = User.query.get(request.form.get("user_id"))
+    if not target: return redirect(url_for("admin_panel", msg="Speler niet gevonden."))
+    action = request.form.get("action", "save")
+    if action == "give_1m": target.money = int(safe_number(target.money)) + 1_000_000
+    elif action == "give_100m": target.money = int(safe_number(target.money)) + 100_000_000
+    elif action == "give_1b": target.money = int(safe_number(target.money)) + 1_000_000_000
+    elif action == "clear_jail": target.jail_until = 0; target.bribe_available_at = 0
+    elif action == "reset_cooldowns":
+        target.last_crime = 0; target.last_collect = 0; target.last_bribe_attempt = 0; target.last_heist = 0; target.travel_arrives_at = 0; target.travel_destination = None; target.travel_mode = None
+    elif action == "kill": target.is_dead = True; target.jail_until = 0
+    elif action == "revive": target.is_dead = False; target.jail_until = 0; target.bribe_available_at = 0
+    else:
+        for field in ["money","bank","bank_loan","exp","bullets","bodyguards","bulletproof_vests","safehouses","lookouts","warehouse_level","cars"]:
+            try: setattr(target, field, int(request.form.get(field) or 0))
+            except Exception: pass
+        target.location = request.form.get("location") or target.location
+        target.rank = request.form.get("rank") or target.rank
+        target.avatar_key = request.form.get("avatar_key") or target.avatar_key
+        target.casino_license = request.form.get("casino_license") == "1"
+        target.is_dead = request.form.get("is_dead") == "1"
+    target.update_rank(); db.session.commit()
+    return redirect(url_for("admin_panel", q=target.username, msg=f"Speler {target.username} aangepast."))
+
+@app.route("/admin_give_vehicle", methods=["POST"])
+def admin_give_vehicle():
+    user, error = admin_required()
+    if error: return error
+    target = User.query.get(request.form.get("user_id")); vehicle_key = request.form.get("vehicle_key"); city = request.form.get("city") or "Birmingham"; amount = max(1, int(request.form.get("amount") or 1))
+    if target and vehicle_key in VEHICLE_BY_KEY and city in CITIES:
+        add_vehicle_to_city(target, city, vehicle_key, amount); db.session.commit()
+        return redirect(url_for("admin_panel", q=target.username, msg=f"{amount}x {VEHICLE_BY_KEY[vehicle_key]['name']} gegeven."))
+    return redirect(url_for("admin_panel", msg="Voertuig geven mislukt."))
+
+@app.route("/admin_give_warehouse", methods=["POST"])
+def admin_give_warehouse():
+    user, error = admin_required()
+    if error: return error
+    target = User.query.get(request.form.get("user_id")); item_key = request.form.get("item_key"); amount = max(1, int(request.form.get("amount") or 1))
+    if target and item_key in CONTRABAND:
+        row = warehouse_item(target, item_key); row.quantity = int(safe_number(row.quantity)) + amount; db.session.commit()
+        return redirect(url_for("admin_panel", q=target.username, msg=f"{amount}x {CONTRABAND[item_key]['label']} gegeven."))
+    return redirect(url_for("admin_panel", msg="Warehouse item geven mislukt."))
+
+@app.route("/admin_give_weapon", methods=["POST"])
+def admin_give_weapon():
+    user, error = admin_required()
+    if error: return error
+    target = User.query.get(request.form.get("user_id")); weapon_key = request.form.get("weapon_key"); amount = max(1, int(request.form.get("amount") or 1))
+    if target and weapon_key in WEAPON_TYPES:
+        row = UserWeapon.query.filter_by(user_id=target.id, weapon_key=weapon_key).first()
+        if not row:
+            row = UserWeapon(user_id=target.id, weapon_key=weapon_key, quantity=0); db.session.add(row)
+        row.quantity = int(safe_number(row.quantity)) + amount; db.session.commit()
+        return redirect(url_for("admin_panel", q=target.username, msg=f"{amount}x {WEAPON_TYPES[weapon_key]['name']} gegeven."))
+    return redirect(url_for("admin_panel", msg="Wapen geven mislukt."))
+
+@app.route("/admin_give_avatar", methods=["POST"])
+def admin_give_avatar():
+    user, error = admin_required()
+    if error: return error
+    target = User.query.get(request.form.get("user_id")); avatar_key = request.form.get("avatar_key"); action = request.form.get("action")
+    if target and avatar_key in PLAYER_AVATARS:
+        keys = owned_avatar_keys(target); keys.add(avatar_key); set_owned_avatar_keys(target, keys)
+        if action == "set": target.avatar_key = avatar_key
+        db.session.commit(); return redirect(url_for("admin_panel", q=target.username, msg=f"Avatar {PLAYER_AVATARS[avatar_key]['label']} gegeven."))
+    return redirect(url_for("admin_panel", msg="Avatar geven mislukt."))
+
+@app.route("/admin_reset_player", methods=["POST"])
+def admin_reset_player():
+    user, error = admin_required()
+    if error: return error
+    target = User.query.get(request.form.get("user_id")); action = request.form.get("action")
+    if not target: return redirect(url_for("admin_panel", msg="Speler niet gevonden."))
+    if action == "delete_user":
+        username = target.username; db.session.delete(target); db.session.commit(); return redirect(url_for("admin_panel", msg=f"Speler {username} verwijderd."))
+    target.money=500; target.bank=0; target.bank_loan=0; target.exp=0; target.rank="Street Runner"; target.location="Birmingham"; target.gin=0; target.bullets=0; target.bodyguards=0; target.bulletproof_vests=0; target.safehouses=0; target.lookouts=0; target.warehouse_level=0; target.cars=0; target.distilleries=0; target.casino_license=False; target.is_dead=False; target.jail_until=0; target.last_crime=0; target.last_heist=0; target.owned_avatars="straat_jongen"; target.avatar_key="straat_jongen"
+    for model in [CityVehicle, WarehouseItem, UserWeapon, CityBusiness, CityFactory, UserProperty, Shipment]: model.query.filter_by(user_id=target.id).delete()
+    MarketplaceListing.query.filter_by(seller_id=target.id).delete(); db.session.commit()
+    return redirect(url_for("admin_panel", q=target.username, msg=f"Speler {target.username} soft reset uitgevoerd."))
 
 with app.app_context():
     os.makedirs(app.instance_path, exist_ok=True)
