@@ -7,6 +7,7 @@ from email.message import EmailMessage
 from flask import Flask, request, redirect, url_for, session, render_template_string, Response
 from flask_sqlalchemy import SQLAlchemy
 from werkzeug.security import generate_password_hash, check_password_hash
+from sqlalchemy import text as sa_text
 
 app = Flask(__name__)
 app.secret_key = os.environ.get("SECRET_KEY", "peaky-blinders-secret-key")
@@ -3018,7 +3019,114 @@ def bank_total_worth(user):
     return int(safe_number(getattr(user, "money", 0))) + int(safe_number(getattr(user, "bank", 0))) - int(safe_number(getattr(user, "bank_loan", 0)))
 
 def migrate_database():
-    """Small SQLite migration helper so old databases do not crash after updates."""
+    """Database migration helper for both Render PostgreSQL and local SQLite."""
+    is_postgres = database_url.startswith("postgresql://")
+
+    if is_postgres:
+        # PostgreSQL does not allow SQLite PRAGMA migrations. Add missing columns safely.
+        with db.engine.begin() as conn:
+            user_migrations = [
+                'ALTER TABLE "user" ADD COLUMN IF NOT EXISTS email VARCHAR(160)',
+                'ALTER TABLE "user" ADD COLUMN IF NOT EXISTS reset_token VARCHAR(40)',
+                'ALTER TABLE "user" ADD COLUMN IF NOT EXISTS reset_expires_at FLOAT DEFAULT 0.0',
+                'ALTER TABLE "user" ADD COLUMN IF NOT EXISTS cars INTEGER DEFAULT 0',
+                'ALTER TABLE "user" ADD COLUMN IF NOT EXISTS distilleries INTEGER DEFAULT 0',
+                'ALTER TABLE "user" ADD COLUMN IF NOT EXISTS last_collect FLOAT DEFAULT 0.0',
+                'ALTER TABLE "user" ADD COLUMN IF NOT EXISTS jail_until FLOAT DEFAULT 0.0',
+                'ALTER TABLE "user" ADD COLUMN IF NOT EXISTS arrests INTEGER DEFAULT 0',
+                'ALTER TABLE "user" ADD COLUMN IF NOT EXISTS bribe_available_at FLOAT DEFAULT 0.0',
+                'ALTER TABLE "user" ADD COLUMN IF NOT EXISTS last_bribe_attempt FLOAT DEFAULT 0.0',
+                'ALTER TABLE "user" ADD COLUMN IF NOT EXISTS last_heist FLOAT DEFAULT 0.0',
+                'ALTER TABLE "user" ADD COLUMN IF NOT EXISTS heists_successful INTEGER DEFAULT 0',
+                'ALTER TABLE "user" ADD COLUMN IF NOT EXISTS casino_license BOOLEAN DEFAULT FALSE',
+                'ALTER TABLE "user" ADD COLUMN IF NOT EXISTS last_property_collect FLOAT DEFAULT 0.0',
+                'ALTER TABLE "user" ADD COLUMN IF NOT EXISTS travel_destination TEXT DEFAULT NULL',
+                'ALTER TABLE "user" ADD COLUMN IF NOT EXISTS travel_arrives_at FLOAT DEFAULT 0.0',
+                'ALTER TABLE "user" ADD COLUMN IF NOT EXISTS travel_mode TEXT DEFAULT NULL',
+                'ALTER TABLE "user" ADD COLUMN IF NOT EXISTS travel_origin TEXT DEFAULT NULL',
+                'ALTER TABLE "user" ADD COLUMN IF NOT EXISTS travel_vehicle_key TEXT DEFAULT NULL',
+                'ALTER TABLE "user" ADD COLUMN IF NOT EXISTS travel_smuggle_item_key TEXT DEFAULT NULL',
+                'ALTER TABLE "user" ADD COLUMN IF NOT EXISTS travel_smuggle_quantity INTEGER DEFAULT 0',
+                'ALTER TABLE "user" ADD COLUMN IF NOT EXISTS police_chief_influence BOOLEAN DEFAULT FALSE',
+                'ALTER TABLE "user" ADD COLUMN IF NOT EXISTS judge_influence BOOLEAN DEFAULT FALSE',
+                'ALTER TABLE "user" ADD COLUMN IF NOT EXISTS mayor_influence BOOLEAN DEFAULT FALSE',
+                'ALTER TABLE "user" ADD COLUMN IF NOT EXISTS customs_officer_influence BOOLEAN DEFAULT FALSE',
+                'ALTER TABLE "user" ADD COLUMN IF NOT EXISTS bulletproof_vests INTEGER DEFAULT 0',
+                'ALTER TABLE "user" ADD COLUMN IF NOT EXISTS safehouses INTEGER DEFAULT 0',
+                'ALTER TABLE "user" ADD COLUMN IF NOT EXISTS lookouts INTEGER DEFAULT 0',
+                'ALTER TABLE "user" ADD COLUMN IF NOT EXISTS warehouse_level INTEGER DEFAULT 0',
+                'ALTER TABLE "user" ADD COLUMN IF NOT EXISTS family_id INTEGER DEFAULT NULL',
+                'ALTER TABLE "user" ADD COLUMN IF NOT EXISTS family_role TEXT DEFAULT \'Solo\'',
+                'ALTER TABLE "user" ADD COLUMN IF NOT EXISTS bank_loan INTEGER DEFAULT 0',
+                'ALTER TABLE "user" ADD COLUMN IF NOT EXISTS last_bank_interest FLOAT DEFAULT 0.0',
+                'ALTER TABLE "user" ADD COLUMN IF NOT EXISTS last_seen FLOAT DEFAULT 0.0',
+                'ALTER TABLE "user" ADD COLUMN IF NOT EXISTS avatar_key TEXT DEFAULT \'straat_jongen\'',
+                'ALTER TABLE "user" ADD COLUMN IF NOT EXISTS owned_avatars TEXT DEFAULT \'straat_jongen\'',
+            ]
+            for sql in user_migrations:
+                conn.execute(sa_text(sql))
+
+            # Fill nulls so old users do not crash after migration.
+            postgres_defaults = {
+                "reset_expires_at": 0.0,
+                "money": 500,
+                "bank": 0,
+                "bank_loan": 0,
+                "last_bank_interest": 0.0,
+                "last_seen": 0.0,
+                "exp": 0,
+                "rank": "Street Runner",
+                "location": "Birmingham",
+                "avatar_key": "straat_jongen",
+                "owned_avatars": "straat_jongen",
+                "gin": 0,
+                "bullets": 0,
+                "bodyguards": 0,
+                "bulletproof_vests": 0,
+                "safehouses": 0,
+                "lookouts": 0,
+                "warehouse_level": 0,
+                "family_role": "Solo",
+                "cars": 0,
+                "distilleries": 0,
+                "last_crime": 0.0,
+                "last_collect": 0.0,
+                "is_dead": False,
+                "jail_until": 0.0,
+                "arrests": 0,
+                "bribe_available_at": 0.0,
+                "last_bribe_attempt": 0.0,
+                "last_heist": 0.0,
+                "heists_successful": 0,
+                "casino_license": False,
+                "last_property_collect": 0.0,
+                "travel_arrives_at": 0.0,
+                "travel_smuggle_quantity": 0,
+                "police_chief_influence": False,
+                "judge_influence": False,
+                "mayor_influence": False,
+                "customs_officer_influence": False,
+            }
+            for column, default in postgres_defaults.items():
+                conn.execute(sa_text(f'UPDATE "user" SET {column} = :default WHERE {column} IS NULL'), {"default": default})
+
+            # Other table migrations used by recent features.
+            conn.execute(sa_text('ALTER TABLE family ADD COLUMN IF NOT EXISTS bank_loan INTEGER DEFAULT 0'))
+            conn.execute(sa_text('ALTER TABLE family ADD COLUMN IF NOT EXISTS last_bank_interest FLOAT DEFAULT 0.0'))
+            conn.execute(sa_text('UPDATE family SET bank_loan = 0 WHERE bank_loan IS NULL'))
+            conn.execute(sa_text('UPDATE family SET last_bank_interest = 0.0 WHERE last_bank_interest IS NULL'))
+
+            conn.execute(sa_text('ALTER TABLE message ADD COLUMN IF NOT EXISTS sender_id INTEGER DEFAULT NULL'))
+            conn.execute(sa_text('ALTER TABLE message ADD COLUMN IF NOT EXISTS read_at FLOAT DEFAULT 0.0'))
+            conn.execute(sa_text('UPDATE message SET read_at = 0.0 WHERE read_at IS NULL'))
+
+            conn.execute(sa_text('ALTER TABLE city_business ADD COLUMN IF NOT EXISTS pending_gin INTEGER DEFAULT 0'))
+            conn.execute(sa_text('UPDATE city_business SET pending_gin = 0 WHERE pending_gin IS NULL'))
+            conn.execute(sa_text('UPDATE city_business SET last_collect = 0.0 WHERE last_collect IS NULL'))
+            conn.execute(sa_text('UPDATE city_business SET distilleries = 0 WHERE distilleries IS NULL'))
+        return
+
+    # Local SQLite migration.
     db_path = os.path.join(app.instance_path, "peaky_blinders.db")
     if not os.path.exists(db_path):
         return
@@ -3027,6 +3135,9 @@ def migrate_database():
     cur.execute("PRAGMA table_info(user)")
     columns = {row[1] for row in cur.fetchall()}
     migrations = {
+        "email": "ALTER TABLE user ADD COLUMN email TEXT DEFAULT NULL",
+        "reset_token": "ALTER TABLE user ADD COLUMN reset_token TEXT DEFAULT NULL",
+        "reset_expires_at": "ALTER TABLE user ADD COLUMN reset_expires_at FLOAT DEFAULT 0.0",
         "cars": "ALTER TABLE user ADD COLUMN cars INTEGER DEFAULT 0",
         "distilleries": "ALTER TABLE user ADD COLUMN distilleries INTEGER DEFAULT 0",
         "last_collect": "ALTER TABLE user ADD COLUMN last_collect FLOAT DEFAULT 0.0",
@@ -3060,16 +3171,13 @@ def migrate_database():
         "last_seen": "ALTER TABLE user ADD COLUMN last_seen FLOAT DEFAULT 0.0",
         "avatar_key": "ALTER TABLE user ADD COLUMN avatar_key TEXT DEFAULT 'straat_jongen'",
         "owned_avatars": "ALTER TABLE user ADD COLUMN owned_avatars TEXT DEFAULT 'straat_jongen'",
-        "email": "ALTER TABLE user ADD COLUMN email TEXT DEFAULT NULL",
-        "reset_token": "ALTER TABLE user ADD COLUMN reset_token TEXT DEFAULT NULL",
-        "reset_expires_at": "ALTER TABLE user ADD COLUMN reset_expires_at FLOAT DEFAULT 0.0",
     }
     for column, sql in migrations.items():
         if column not in columns:
             cur.execute(sql)
 
-    # Fix old rows that may contain NULL values from earlier versions.
     defaults = {
+        "reset_expires_at": 0.0,
         "money": 500,
         "bank": 0,
         "bank_loan": 0,
@@ -3080,7 +3188,6 @@ def migrate_database():
         "location": "Birmingham",
         "avatar_key": "straat_jongen",
         "owned_avatars": "straat_jongen",
-        "reset_expires_at": 0.0,
         "gin": 0,
         "bullets": 0,
         "bodyguards": 0,
@@ -3118,9 +3225,6 @@ def migrate_database():
             else:
                 cur.execute(f"UPDATE user SET {column} = ? WHERE {column} IS NULL", (default,))
 
-
-
-    # Family table migrations for existing databases after adding bank loan fields.
     cur.execute("SELECT name FROM sqlite_master WHERE type='table' AND name='family'")
     if cur.fetchone():
         cur.execute("PRAGMA table_info(family)")
@@ -3135,7 +3239,6 @@ def migrate_database():
         cur.execute("UPDATE family SET bank_loan = 0 WHERE bank_loan IS NULL")
         cur.execute("UPDATE family SET last_bank_interest = 0.0 WHERE last_bank_interest IS NULL")
 
-    # Message table migrations for player-to-player messages and read receipts.
     cur.execute("PRAGMA table_info(message)")
     message_columns = {row[1] for row in cur.fetchall()}
     message_migrations = {
@@ -3147,7 +3250,6 @@ def migrate_database():
             cur.execute(sql)
     cur.execute("UPDATE message SET read_at = 0.0 WHERE read_at IS NULL")
 
-    # CityBusiness table migrations for city-based distillery stock.
     cur.execute("PRAGMA table_info(city_business)")
     city_business_columns = {row[1] for row in cur.fetchall()}
     if "pending_gin" not in city_business_columns:
@@ -3167,20 +3269,6 @@ def migrate_database():
             FOREIGN KEY(family_id) REFERENCES family(id)
         )
     """)
-
-    cur.execute("""
-        CREATE TABLE IF NOT EXISTS message (
-            id INTEGER PRIMARY KEY,
-            user_id INTEGER NOT NULL,
-            category VARCHAR(30) DEFAULT 'system',
-            title VARCHAR(120) NOT NULL,
-            body TEXT NOT NULL,
-            is_read BOOLEAN DEFAULT 0,
-            created_at FLOAT DEFAULT 0.0,
-            FOREIGN KEY(user_id) REFERENCES user(id)
-        )
-    """)
-
     conn.commit()
     conn.close()
 
