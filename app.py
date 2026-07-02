@@ -1233,6 +1233,72 @@ def safe_int(value):
     except Exception:
         return 0
 
+def admin_delete_user_related_data(target):
+    """Delete all player-owned rows before deleting a user so PostgreSQL never tries to set non-null user_id to NULL."""
+    if not target or not getattr(target, "id", None):
+        return
+
+    uid = target.id
+
+    # Direct user-owned data
+    for model in [CityVehicle, WarehouseItem, UserWeapon, CityBusiness, CityFactory, UserProperty, Shipment]:
+        try:
+            model.query.filter_by(user_id=uid).delete(synchronize_session=False)
+        except Exception:
+            pass
+
+    # Messages / chats / friends
+    try:
+        Message.query.filter((Message.user_id == uid) | (Message.sender_id == uid)).delete(synchronize_session=False)
+    except Exception:
+        pass
+    try:
+        Friend.query.filter((Friend.user_id == uid) | (Friend.friend_id == uid)).delete(synchronize_session=False)
+    except Exception:
+        pass
+    try:
+        FamilyChatMessage.query.filter_by(user_id=uid).delete(synchronize_session=False)
+    except Exception:
+        pass
+    try:
+        FamilyJoinRequest.query.filter_by(user_id=uid).delete(synchronize_session=False)
+    except Exception:
+        pass
+
+    # Marketplace
+    try:
+        MarketplaceListing.query.filter_by(seller_id=uid).delete(synchronize_session=False)
+    except Exception:
+        pass
+    try:
+        MarketplaceTrade.query.filter((MarketplaceTrade.seller_id == uid) | (MarketplaceTrade.buyer_id == uid)).delete(synchronize_session=False)
+    except Exception:
+        pass
+
+    # City assets owned by player
+    try:
+        CityCasino.query.filter_by(owner_id=uid).update({"owner_id": None}, synchronize_session=False)
+        CityCasino.query.filter_by(heir_id=uid).update({"heir_id": None}, synchronize_session=False)
+    except Exception:
+        pass
+    try:
+        CityWeaponFactory.query.filter_by(owner_id=uid).update({"owner_id": None}, synchronize_session=False)
+    except Exception:
+        pass
+
+    # Families / territories
+    try:
+        families = Family.query.filter_by(boss_id=uid).all()
+        for family in families:
+            CityTerritory.query.filter_by(family_id=family.id).update({"family_id": None}, synchronize_session=False)
+            User.query.filter_by(family_id=family.id).update({"family_id": None, "family_role": "Solo"}, synchronize_session=False)
+            FamilyJoinRequest.query.filter_by(family_id=family.id).delete(synchronize_session=False)
+            FamilyChatMessage.query.filter_by(family_id=family.id).delete(synchronize_session=False)
+            db.session.delete(family)
+    except Exception:
+        pass
+
+
 
 def rank_bonus(user, key):
     return RANK_BONUSES.get(user.rank, RANK_BONUSES["Street Runner"]).get(key, 0)
@@ -9698,15 +9764,67 @@ def admin_give_avatar():
 @app.route("/admin_reset_player", methods=["POST"])
 def admin_reset_player():
     user, error = admin_required()
-    if error: return error
-    target = User.query.get(request.form.get("user_id")); action = request.form.get("action")
-    if not target: return redirect(url_for("admin_panel", msg="Speler niet gevonden."))
+    if error:
+        return error
+
+    target = User.query.get(request.form.get("user_id"))
+    action = request.form.get("action")
+    if not target:
+        return redirect(url_for("admin_panel", msg="Speler niet gevonden."))
+
     if action == "delete_user":
-        username = target.username; db.session.delete(target); db.session.commit(); return redirect(url_for("admin_panel", msg=f"Speler {username} verwijderd."))
-    target.money=500; target.bank=0; target.bank_loan=0; target.exp=0; target.rank="Street Runner"; target.location="Birmingham"; target.gin=0; target.bullets=0; target.bodyguards=0; target.bulletproof_vests=0; target.safehouses=0; target.lookouts=0; target.warehouse_level=0; target.cars=0; target.distilleries=0; target.casino_license=False; target.is_dead=False; target.jail_until=0; target.last_crime=0; target.last_heist=0; target.owned_avatars="straat_jongen"; target.avatar_key="straat_jongen"
-    for model in [CityVehicle, WarehouseItem, UserWeapon, CityBusiness, CityFactory, UserProperty, Shipment]: model.query.filter_by(user_id=target.id).delete()
-    MarketplaceListing.query.filter_by(seller_id=target.id).delete(); db.session.commit()
+        username = target.username
+        admin_delete_user_related_data(target)
+        db.session.delete(target)
+        db.session.commit()
+        return redirect(url_for("admin_panel", msg=f"Speler {username} verwijderd."))
+
+    # Soft reset: keep username, email and password, but remove progress and inventory.
+    admin_delete_user_related_data(target)
+
+    target.money = 500
+    target.bank = 0
+    target.bank_loan = 0
+    target.exp = 0
+    target.rank = "Street Runner"
+    target.location = "Birmingham"
+    target.gin = 0
+    target.bullets = 0
+    target.bodyguards = 0
+    target.bulletproof_vests = 0
+    target.safehouses = 0
+    target.lookouts = 0
+    target.warehouse_level = 0
+    target.family_id = None
+    target.family_role = "Solo"
+    target.cars = 0
+    target.distilleries = 0
+    target.casino_license = False
+    target.police_chief_influence = False
+    target.judge_influence = False
+    target.mayor_influence = False
+    target.customs_officer_influence = False
+    target.is_dead = False
+    target.jail_until = 0
+    target.arrests = 0
+    target.bribe_available_at = 0
+    target.last_bribe_attempt = 0
+    target.last_crime = 0
+    target.last_heist = 0
+    target.last_collect = 0
+    target.travel_destination = None
+    target.travel_arrives_at = 0
+    target.travel_mode = None
+    target.travel_origin = None
+    target.travel_vehicle_key = None
+    target.travel_smuggle_item_key = None
+    target.travel_smuggle_quantity = 0
+    target.owned_avatars = "straat_jongen"
+    target.avatar_key = "straat_jongen"
+
+    db.session.commit()
     return redirect(url_for("admin_panel", q=target.username, msg=f"Speler {target.username} soft reset uitgevoerd."))
+
 
 with app.app_context():
     os.makedirs(app.instance_path, exist_ok=True)
